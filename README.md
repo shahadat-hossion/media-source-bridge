@@ -119,17 +119,6 @@ Automatically added titles and their generated files are tracked. If an administ
 > [!NOTE]
 > This product uses the TMDB API but is not endorsed or certified by TMDB. Anime discovery data is provided by AniList.
 
-## Manual installation
-
-Download the plugin ZIP from [GitHub Releases](https://github.com/shahadat-hossion/media-source-bridge/releases/latest). Extract it into a folder named `Media Source Bridge` inside Jellyfin's plugins directory, then restart Jellyfin.
-
-Common plugin locations:
-
-- Windows tray installation: `C:\ProgramData\Jellyfin\Server\plugins\Media Source Bridge`
-- Linux package installation: `/var/lib/jellyfin/plugins/Media Source Bridge`
-
-The exact Linux path can differ for Docker, Snap, or other installation methods.
-
 ## How it works
 
 ```text
