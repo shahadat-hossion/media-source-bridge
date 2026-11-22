@@ -33,6 +33,9 @@ jobs:
       - name: Build release package
         shell: pwsh
         run: .\build.ps1
+      - name: Build torrent bridge bundles
+        shell: pwsh
+        run: .\scripts\Build-TorrentBridge.ps1
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
         with:
@@ -40,6 +43,7 @@ jobs:
           path: |
             dist/Media-Source-Bridge-*.zip
             dist/Media-Source-Bridge-*.zip.md5
+            dist/Torrent-Bridge-*.zip
       - name: Publish GitHub release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
@@ -48,6 +52,7 @@ jobs:
           files: |
             dist/Media-Source-Bridge-*.zip
             dist/Media-Source-Bridge-*.zip.md5
+            dist/Torrent-Bridge-*.zip
       - name: Publish Jellyfin catalog entry
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
