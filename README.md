@@ -18,11 +18,12 @@ Media Source Bridge is a Jellyfin 12 plugin for media indexes hosted by a local 
 By default, the plugin creates small `.strm` pointer files and playback continues to use the original private server. Administrators can instead explicitly download the actual video files into the selected Jellyfin library.
 
 > [!IMPORTANT]
-> Only loopback and private IPv4 sources are accepted (`10.x.x.x`, `172.16-31.x.x`, and `192.168.x.x`). The Jellyfin server must be able to route to the source. This is not a public internet search engine, torrent client, or general-purpose FTP browser.
+> FTP and HTTP media-library sources must use loopback or a private IPv4 address (`10.x.x.x`, `172.16-31.x.x`, or `192.168.x.x`). The Jellyfin server must be able to route to each source.
 
 ## Features
 
 - Search multiple private FTP, HTTP, and HTTPS directory indexes from Jellyfin.
+- Search configured torrent providers from Jellyfin and identify matching titles with a **Torrent** badge.
 - Paste a direct media file or folder link from a configured source and analyze it before adding.
 - Keep title search and direct-link importing on separate, focused Jellyfin pages.
 - Separate searches for **Movies**, **Shows**, and **Anime**.
@@ -42,6 +43,32 @@ By default, the plugin creates small `.strm` pointer files and playback continue
 - Remember administrator-deleted automated titles so they are not added again.
 
 Supported video extensions include `.mkv`, `.mp4`, `.avi`, `.mov`, `.m4v`, `.ts`, `.m2ts`, `.webm`, `.wmv`, `.mpg`, and `.mpeg`.
+
+### Experimental torrent playback check
+
+Jellyfin administrators can check a BitTorrent v1 magnet link under **Import Link → Torrent playback check**. On the Jellyfin host, install Node.js 22 or newer and FFprobe, then run `npm ci` and `npm start` from `scripts/torrent-bridge`. If FFprobe is outside PATH, set `TORRENT_FFPROBE` to its executable path before starting the bridge. The bridge and Jellyfin must share loopback access.
+
+For Jellyfin-managed startup, place the bridge files and installed Node dependencies in `torrent-bridge` under Jellyfin's program data directory. Put the Node executable in `torrent-bridge/runtime` as `node.exe` on Windows or `node` on Linux. Jellyfin starts and supervises that installation. Use one launcher for the bridge.
+
+The bridge discovers public peers through DHT, selects the largest supported video, times the first 4 MiB (or the entire file if smaller), and estimates the average video bitrate from its duration and size. **Likely smooth** requires the full opening sample and at least 50% throughput headroom. **May buffer** flags insufficient headroom or an unknown bitrate. **Unavailable** covers cases such as missing metadata, an empty opening sample, and torrents over the RAM limit. These checks measure the torrent source at startup. Playback can also depend on the client and Jellyfin transcoding.
+
+**Import Link** also offers **Save Test STRM** for manual testing. Automatic torrent imports use a durable URL that reloads the torrent on demand. The bridge holds one torrent at a time, with a RAM budget of up to 4 GiB based on the host's memory at startup. Jellyfin may write temporary transcoding output if the client requires a transcode.
+
+Run `npm test` from the bridge directory to test the HTTP check and byte-range playback with a local seed. Set `TORRENT_TEST_VIDEO` to an MP4 of at least 2 KiB to include real FFprobe metadata in that test.
+
+### Search with torrent providers
+
+In **Setup Media → Torrent Providers → Browse Providers**, search the built-in catalog or filter it by media type. Use **Test** to check a provider from the Jellyfin server, then **Add**. The built-in entries need no credentials. Knaben covers movies, shows, and anime. The 1337x, The Pirate Bay, and YTS entries use Knaben with an individual source filter. Nyaa covers anime.
+
+Enable **18+ torrent mode** under **Setup Media → Source Availability** to show the **Adult torrents** search filter for administrators. This filter searches configured adult-capable providers such as 0Magnet and custom Torznab providers that support adult categories. Adult results appear only in this filter.
+
+Use **Setup Media → Source Availability** to pause configured media servers (FTP, HTTP, and HTTPS) and torrent sources independently. Both switches save immediately and retain the configured servers and providers. Pausing media servers excludes them from search, import, and automation. Pausing torrents stops provider searches and new playback checks. Existing Jellyfin library items remain searchable, and you can still run connection tests while either source type is paused.
+
+To use an additional Torznab indexer, open **Add Custom Torznab** and enter its name, API endpoint, and API key if required. Enter the key in its own field. Use **Test connection** to verify search access, then **Add provider**.
+
+Signed-in users can search enabled providers through **Search & Add Media**. **Torrent** badges open the release list with provider, resolution, file size, and seeder count when supplied. Matching library or media server cards carry the badge. Other matches appear under **Torrent providers**.
+
+**Experimental torrent playback.** When an administrator selects **Open** on a movie, show, or anime result tagged **Torrent**, the bridge tests up to four compatible releases in parallel and selects one that fills the opening video buffer. The plugin then creates STRM files and opens the indexed title. The bridge discovers peers through DHT and public trackers. Automatic import supports releases with a compatible magnet that fit the bridge's RAM budget.
 
 ## Requirements
 

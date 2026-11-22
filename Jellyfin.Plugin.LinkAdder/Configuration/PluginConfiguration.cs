@@ -3,8 +3,12 @@ namespace Jellyfin.Plugin.LinkAdder.Configuration;
 public sealed class PluginConfiguration : BasePluginConfiguration
 {
     public bool ReplaceDefaultSearch { get; set; } = true;
+    public bool FtpSourcesEnabled { get; set; } = true;
+    public bool TorrentSourcesEnabled { get; set; } = true;
+    public bool AdultTorrentModeEnabled { get; set; }
     public SearchDestinationOptions SearchDestinations { get; set; } = new();
     public List<CustomSource> CustomSources { get; set; } = [];
+    public List<TorrentProvider> TorrentProviders { get; set; } = [];
     public List<MediaAddRequest> MediaRequests { get; set; } = [];
     public AutomationOptions Automation { get; set; } = new();
     public List<AutomationHistoryItem> AutomationHistory { get; set; } = [];
@@ -12,11 +16,28 @@ public sealed class PluginConfiguration : BasePluginConfiguration
     public List<string> AutomationExcludedIds { get; set; } = [];
 }
 
+public sealed class TorrentProvider
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public string Name { get; set; } = string.Empty;
+    public string Endpoint { get; set; } = string.Empty;
+    public string ApiKey { get; set; } = string.Empty;
+    public string CatalogId { get; set; } = string.Empty;
+}
+
 public sealed class SearchDestinationOptions
 {
     public string MovieLibraryPath { get; set; } = string.Empty;
     public string SeriesLibraryPath { get; set; } = string.Empty;
     public string AnimeLibraryPath { get; set; } = string.Empty;
+
+    internal string GetLibraryPath(string mediaType) => mediaType switch
+    {
+        "movie" => MovieLibraryPath,
+        "series" => SeriesLibraryPath,
+        "anime" => AnimeLibraryPath,
+        _ => string.Empty
+    };
 }
 
 public sealed class CustomSource

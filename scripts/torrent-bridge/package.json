@@ -1,0 +1,13 @@
+{
+  "name": "jellyfin-torrent-playback-prototype",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node bridge.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "memory-chunk-store": "1.3.5",
+    "webtorrent": "3.0.21"
+  }
+}

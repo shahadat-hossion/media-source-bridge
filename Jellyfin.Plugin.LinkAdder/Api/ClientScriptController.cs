@@ -40,6 +40,15 @@ public sealed class ClientScriptController : ControllerBase
         return File(script!, "application/javascript");
     }
 
+    [AllowAnonymous]
+    [HttpGet("torrent-search.js")]
+    public FileStreamResult GetTorrentSearch()
+    {
+        Response.Headers.CacheControl = "no-cache";
+        var script = typeof(ClientScriptController).Assembly.GetManifestResourceStream("Jellyfin.Plugin.LinkAdder.Configuration.torrentSearch.js");
+        return File(script!, "application/javascript");
+    }
+
     private const string ClientScript = """
         (() => {
             'use strict';
@@ -307,8 +316,15 @@ public sealed class ClientScriptController : ControllerBase
             let nativeSearchSequence = 0;
             let nativeLocalItems = [];
             let nativeRemoteItems = [];
+            let nativeRemoteStatus = '';
+            let nativeTorrentGroups = [];
+            let nativeTorrentStatus = '';
             let searchActions;
+            let torrentSearchModule;
+            let torrentActions;
+            let canManageTorrents;
             let nativeMediaType = '';
+            let nativeSource = '';
 
             const value = (item, name) => item?.[name[0].toLowerCase() + name.slice(1)] ?? item?.[name];
             const escapeHtml = (text) => String(text ?? '').replace(/[&<>"']/g, (character) => ({
@@ -343,17 +359,25 @@ public sealed class ClientScriptController : ControllerBase
                     #${remoteSectionId} { position:fixed;z-index:20;inset:4.2em 0 0;overflow:auto;background:#101010;padding:1.2em 0 5em; }
                     #${remoteSectionId} .localIspNativeFields { max-width:54em;margin:0 auto 1.5em;padding:0 3.3%; }
                     #${remoteSectionId} .localIspNativeInputRow { display:flex;align-items:center;gap:.7em; }
-                    #${remoteSectionId} .localIspNativeInputRow .inputContainer { flex:1;margin:0; }
+                    #${remoteSectionId} .localIspNativeInputRow .inputContainer { flex:1;min-width:0;margin:0; }
+                    @media(max-width:600px) { #${remoteSectionId} .localIspNativeInputRow { flex-wrap:wrap; } #${remoteSectionId} .localIspNativeInputRow .inputContainer { flex:1 1 75%; } }
                     #${remoteSectionId} .localIspNativeInputRow select { padding:.55em;background:#242424;color:inherit;border:1px solid #777;border-radius:.3em; }
                     #${remoteSectionId} .localIspResultSection { margin-top:1.6em; }
-                    #${remoteSectionId} .localIspRemoteGrid { display:grid;grid-template-columns:repeat(auto-fill,minmax(10.5em,1fr));gap:1.25em;padding:0 3.3%; }
-                    #${remoteSectionId} .localIspRemoteCard { min-width:0;max-width:14em; }
+                    #${remoteSectionId} .localIspRemoteGrid { display:grid!important;grid-template-columns:repeat(auto-fill,minmax(10em,1fr));gap:1.75rem 1rem;padding:0 clamp(1rem,3vw,3rem); }
+                    #${remoteSectionId} .localIspRemoteGrid > .localIspRemoteCard { display:block;width:100%!important;min-width:0!important;max-width:none!important;margin:0!important;padding:0!important; }
+                    #${remoteSectionId} .localIspRemoteCard .cardBox { margin:0!important; }
+                    #${remoteSectionId} .localIspRemoteCard .cardScalable { position:relative; }
+                    #${remoteSectionId} .localIspRemoteCard .cardPadder { position:relative;box-sizing:border-box;aspect-ratio:2/3;height:auto;padding:0!important; }
+                    #${remoteSectionId} .localIspRemoteCard .cardText:not(.localIspSource) { display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;white-space:normal;overflow:hidden;overflow-wrap:anywhere;line-height:1.25;min-height:2.5em;margin-top:.4em; }
                     #${remoteSectionId} .localIspPoster { display:block;position:absolute;inset:0;background-position:center;background-size:cover;background-color:rgba(255,255,255,.06);border-radius:.3em; }
+                    #${remoteSectionId} .localIspPosterButton { position:absolute;inset:0;display:block;width:100%;height:100%;padding:0;border:0;border-radius:.3em;background:transparent;cursor:pointer; }
+                    #${remoteSectionId} .localIspPosterButton:focus-visible { outline:2px solid #00a4dc;outline-offset:2px; }
                     #${remoteSectionId} .localIspPosterFallback { display:grid;place-items:center;color:rgba(255,255,255,.55);font-size:3em; }
                     #${remoteSectionId} .localIspSource { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.7;font-size:.86em; }
                     #${remoteSectionId} .localIspAddButton { width:100%;margin:.55em 0 0!important; }
                     #${remoteSectionId} .localIspSearchMessage { padding:0 3.3%;opacity:.75; }
-                    @media(max-width:600px){#${remoteSectionId} .localIspRemoteGrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:.7em;padding:0 1em}}
+                    #${remoteSectionId} .localIspTorrentTitle { width:100%;padding:0;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer; }
+                    @media(max-width:600px){#${remoteSectionId} .localIspRemoteGrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem .75rem;padding:0 1em}}
                 `;
                 document.head.appendChild(style);
             }
@@ -363,7 +387,7 @@ public sealed class ClientScriptController : ControllerBase
                 if (section) return section;
                 section = document.createElement('section');
                 section.id = remoteSectionId;
-                section.innerHTML = '<div class="localIspNativeFields"><div class="localIspNativeInputRow"><span class="material-icons search" aria-hidden="true"></span><div class="inputContainer"><input id="localIspNativeQuery" class="emby-input" type="text" placeholder="Search" autocomplete="off"></div><select id="localIspNativeMediaType" aria-label="Media type"><option value="">All media</option><option value="anime">Anime</option><option value="movie">Movies</option><option value="series">Shows</option></select></div></div><div id="localIspCombinedResults" class="localIspResultSection"><h2 class="sectionTitle sectionTitle-cards focuscontainer-x padded-left padded-right">Search Results</h2><div class="localIspSearchMessage">Enter at least two characters to search your library and configured media servers.</div></div>';
+                section.innerHTML = '<div class="localIspNativeFields"><div class="localIspNativeInputRow"><span class="material-icons search" aria-hidden="true"></span><div class="inputContainer"><input id="localIspNativeQuery" class="emby-input" type="text" placeholder="Search" autocomplete="off"></div><select id="localIspNativeMediaType" aria-label="Media type"><option value="">All media</option><option value="anime">Anime</option><option value="movie">Movies</option><option value="series">Shows</option><option value="other">Other</option></select><select id="localIspNativeSource" aria-label="Search source"><option value="">All sources</option><option value="ftp">FTP</option><option value="torrent">Torrent</option></select></div></div><div id="localIspCombinedResults" class="localIspResultSection"><h2 class="sectionTitle sectionTitle-cards focuscontainer-x padded-left padded-right">Search Results</h2><div class="localIspSearchMessage">Enter at least two characters to search your library and configured media servers.</div></div>';
                 document.body.appendChild(section);
                 return section;
             }
@@ -374,10 +398,14 @@ public sealed class ClientScriptController : ControllerBase
             }
 
             function localCard(item) {
-                const image = localPoster(item);
-                const poster = image ? `<span class="localIspPoster" role="img" aria-label="${escapeHtml(item.Name)} poster" style="background-image:url('${escapeHtml(image).replace(/'/g, '%27')}')"></span>`
+                const poster = posterButton(localPoster(item), item.Name);
+                return `<div class="card overflowPortraitCard localIspRemoteCard"><div class="cardBox cardBox-bottompadded"><div class="cardScalable"><div class="cardPadder cardPadder-overflowPortrait">${poster}</div></div><div class="cardText cardTextCentered">${escapeHtml(item.Name)}</div><div class="cardText cardTextCentered localIspSource">${escapeHtml(item.Type)}${item.ProductionYear ? ' · ' + item.ProductionYear : ''}</div><button type="button" is="emby-button" class="raised button-submit localIspAddButton localIspPlayButton" data-id="${escapeHtml(item.Id)}"><span class="material-icons" aria-hidden="true">play_arrow</span><span>Play</span></button></div></div>`;
+            }
+
+            function posterButton(image, title) {
+                const poster = image ? `<span class="localIspPoster" aria-hidden="true" style="background-image:url('${escapeHtml(image).replace(/'/g, '%27')}')"></span>`
                     : '<span class="localIspPoster localIspPosterFallback material-icons movie" aria-hidden="true"></span>';
-                return `<div class="card overflowPortraitCard localIspRemoteCard"><div class="cardBox cardBox-bottompadded"><div class="cardScalable"><div class="cardPadder cardPadder-overflowPortrait">${poster}</div></div><div class="cardText cardTextCentered">${escapeHtml(item.Name)}</div><div class="cardText cardTextCentered localIspSource">${escapeHtml(item.Type)}${item.ProductionYear ? ' · ' + item.ProductionYear : ''}</div><button is="emby-button" class="raised button-submit localIspAddButton localIspOpenButton" data-id="${escapeHtml(item.Id)}"><span class="material-icons" aria-hidden="true">play_arrow</span><span>${item.Type === 'Movie' || item.Type === 'Episode' ? 'Play' : 'Open'}</span></button></div></div>`;
+                return `<button type="button" class="localIspPosterButton" aria-label="Open ${escapeHtml(title)}">${poster}</button>`;
             }
 
             function renderLocalResults(items) {
@@ -386,14 +414,12 @@ public sealed class ClientScriptController : ControllerBase
             }
 
             function remoteCard(item, index) {
-                const poster = item.posterUrl
-                    ? `<span class="localIspPoster" role="img" aria-label="${escapeHtml(item.name)} poster" style="background-image:url('${escapeHtml(item.posterUrl).replace(/'/g, '%27')}')"></span>`
-                    : '<span class="localIspPoster localIspPosterFallback material-icons movie" aria-hidden="true"></span>';
+                const poster = posterButton(item.posterUrl, item.name);
                 const category = { movie:'Movie', series:'Show', anime:'Anime' }[item.mediaType];
                 return `<div class="card overflowPortraitCard localIspRemoteCard" data-index="${index}">
                     <div class="cardBox cardBox-bottompadded"><div class="cardScalable"><div class="cardPadder cardPadder-overflowPortrait">${poster}</div></div>
                     <div class="cardText cardTextCentered">${escapeHtml(item.name)}</div><div class="cardText cardTextCentered localIspSource">${category} · ${escapeHtml(item.source)}</div>
-                    <button is="emby-button" class="raised button-submit localIspAddButton" data-index="${index}"><span class="material-icons" aria-hidden="true">add</span><span>Add</span></button></div></div>`;
+                    <button is="emby-button" class="raised button-submit localIspAddButton" data-index="${index}"><span class="material-icons" aria-hidden="true">add</span><span>FTP</span></button></div></div>`;
             }
 
             function renderRemoteResults(items) {
@@ -405,48 +431,145 @@ public sealed class ClientScriptController : ControllerBase
                 const section = document.querySelector('#localIspCombinedResults');
                 if (!section) return;
                 const remoteItems = nativeRemoteItems;
-                const cards = nativeLocalItems.slice(0, 30).map(localCard).join('')
-                    + remoteItems.map(remoteCard).join('');
+                const localItems = nativeLocalItems;
+                const visibleLocalItems = localItems.slice(0, 30);
+                const cards = visibleLocalItems.map(localCard).join('') + remoteItems.map(remoteCard).join('');
                 section.innerHTML = '<h2 class="sectionTitle sectionTitle-cards focuscontainer-x padded-left padded-right">Search Results</h2>'
-                    + (cards ? `<div class="localIspRemoteGrid">${cards}</div>` : '<div class="localIspSearchMessage">No matching titles found.</div>');
-                section.querySelectorAll('.localIspOpenButton').forEach((button) => button.addEventListener('click', async () => {
-                    const item = await ApiClient.getItem(ApiClient.getCurrentUserId(), button.dataset.id);
-                    openIndexedItem(item);
-                }));
-                const buttons = section.querySelectorAll('.localIspAddButton:not(.localIspOpenButton)');
+                    + (cards || nativeTorrentGroups.length ? `<div class="localIspRemoteGrid">${cards}</div>` : '<div class="localIspSearchMessage">No matching titles found.</div>');
+                renderNativeTorrents(section, visibleLocalItems, remoteItems);
+                if (nativeRemoteStatus) {
+                    const message = document.createElement('p');
+                    message.className = 'localIspSearchMessage';
+                    message.textContent = nativeRemoteStatus;
+                    section.append(message);
+                }
+                section.querySelectorAll('.localIspPlayButton').forEach(button => {
+                    const open = () => openIndexedItem(button.dataset.id);
+                    button.onclick = async () => {
+                        searchActions ??= import(ApiClient.getUrl('LocalIspFtpLoader/search-actions.js'));
+                        const actions = await searchActions.catch(() => {
+                            searchActions = null;
+                            return null;
+                        });
+                        if (button.isConnected) {
+                            const item = visibleLocalItems.find(entry => entry.Id === button.dataset.id);
+                            return actions ? actions.playItem(item) : open();
+                        }
+                    };
+                    button.closest('.cardBox').querySelector('.localIspPosterButton').onclick = open;
+                });
+                const buttons = section.querySelectorAll('.localIspAddButton[data-index]');
                 if (!buttons.length) return;
                 searchActions ??= import(ApiClient.getUrl('LocalIspFtpLoader/search-actions.js'));
-                const localItems = nativeLocalItems;
                 searchActions.then(actions => {
                     for (const button of buttons) {
-                        if (button.isConnected) actions.bind(button, remoteItems[Number(button.dataset.index)], localItems, pluginCall);
+                        if (!button.isConnected) continue;
+                        const item = remoteItems[Number(button.dataset.index)];
+                        actions.bind(button, item, localItems, pluginCall);
+                        actions.bindPoster(button.closest('.cardBox').querySelector('.localIspPosterButton'), button, item.name);
                     }
                 }).catch(() => { for (const button of buttons) button.textContent = 'Actions unavailable'; });
             }
 
-            async function searchRemoteSources(query, sequence, filter, localSearch) {
+            function renderNativeTorrents(section, localItems, remoteItems) {
+                const grid = section.querySelector('.localIspRemoteGrid');
+                const cards = grid?.querySelectorAll('.cardBox');
+                const localTitles = localItems.map(item => ({title:item.Name, type:item.category, year:item.ProductionYear}));
+                const remoteTitles = remoteItems.map(item => {
+                    const year = item.name.match(/\s*[(\[]((?:19|20)\d{2})[)\]]\s*$/);
+                    return {title:year ? item.name.slice(0, year.index) : item.name, type:item.mediaType, year:year ? Number(year[1]) : null};
+                });
+                const matched = new Map();
+                for (const original of nativeTorrentGroups) {
+                    const group = {...original, releases:[...original.releases]};
+                    const localIndex = torrentActions.torrentMatch(group, localTitles);
+                    const remoteIndex = torrentActions.torrentMatch(group, remoteTitles);
+                    let target = cards[localIndex] ?? (remoteIndex >= 0 ? cards[localItems.length + remoteIndex] : null);
+                    if (target && matched.has(target)) {
+                        matched.get(target).releases.push(...group.releases);
+                        continue;
+                    }
+                    const torrentOnly = !target;
+                    if (torrentOnly) {
+                        const card = document.createElement('div');
+                        card.className = 'card overflowPortraitCard localIspRemoteCard';
+                        const poster = posterButton(group.posterUrl, group.title);
+                        card.innerHTML = `<div class="cardBox"><div class="cardScalable"><div class="cardPadder cardPadder-overflowPortrait">${poster}</div></div><button type="button" class="cardText cardTextCentered localIspTorrentTitle">${escapeHtml(group.title)}</button><div class="cardText cardTextCentered localIspSource">${escapeHtml([group.year, {movie:'Movie', series:'Show', anime:'Anime', adult:'Adult', other:'Other'}[group.type]].filter(Boolean).join(' · '))}</div></div>`;
+                        grid.append(card);
+                        target = card.firstElementChild;
+                    }
+                    if (group.type === 'other') {
+                        target.querySelector('.localIspTorrentTitle').disabled = true;
+                        continue;
+                    }
+                    matched.set(target, group);
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = 'raised button-submit localIspAddButton emby-button';
+                    button.setAttribute('is', 'emby-button');
+                    button.innerHTML = '<span class="material-icons" aria-hidden="true">add</span><span>Torrent</span>';
+                    button.setAttribute('aria-label', (torrentOnly ? 'Add ' : 'Open ') + group.title + ' from a torrent');
+                    button.onclick = () => {
+                        const root = document.getElementById(remoteSectionId);
+                        if (root) return torrentActions.prepareTorrent(group, root, pluginCall, button, torrentOnly);
+                    };
+                    target.append(button);
+                    if (torrentOnly) {
+                        target.querySelector('.localIspPosterButton').onclick = () => button.click();
+                        target.querySelector('.localIspTorrentTitle').onclick = () => button.click();
+                    }
+                }
+                if (nativeTorrentStatus) {
+                    const message = document.createElement('p');
+                    message.className = 'localIspSearchMessage';
+                    message.textContent = nativeTorrentStatus;
+                    section.append(message);
+                }
+            }
+
+            async function searchNativeTorrents(query, sequence, filter) {
+                try {
+                    const result = await pluginCall('TorrentProviders/Search', 'POST', { query, mediaType:filter });
+                    if (sequence !== nativeSearchSequence) return;
+                    if (value(result, 'Releases')?.length) {
+                        torrentSearchModule ??= import(ApiClient.getUrl('LocalIspFtpLoader/torrent-search.js'));
+                        const actions = await torrentSearchModule;
+                        if (sequence !== nativeSearchSequence) return;
+                        torrentActions = actions;
+                        nativeTorrentGroups = actions.groupTorrents(result);
+                    }
+                    const failed = value(result, 'FailedProviders');
+                    const providers = value(result, 'ProviderCount');
+                    if (failed) nativeTorrentStatus = failed === providers ? 'Torrent providers could not be searched.' : 'Some torrent providers could not be searched.';
+                    else if (filter === 'adult' && providers === 0) nativeTorrentStatus = 'Add an adult-capable torrent provider in Setup Media, such as 0Magnet.';
+                    else if (filter === 'other' && providers === 0) nativeTorrentStatus = 'Enable torrent sources and add a Torznab provider that supports Other in Setup Media.';
+                    else if (providers && !nativeTorrentGroups.length) nativeTorrentStatus = 'No matching torrent releases found.';
+                } catch (error) {
+                    torrentSearchModule = null;
+                    if (sequence !== nativeSearchSequence) return;
+                    nativeTorrentStatus = error.message || 'Torrent results could not be loaded.';
+                }
+                if (sequence === nativeSearchSequence) renderCombinedResults();
+            }
+
+            async function searchRemoteSources(query, sequence, filter) {
                 const section = document.querySelector('#localIspCombinedResults');
                 if (!section) return;
                 if (query.length < 2) {
-                    section.innerHTML = '<h2 class="sectionTitle sectionTitle-cards focuscontainer-x padded-left padded-right">Search Results</h2><div class="localIspSearchMessage">Enter at least two characters to search your library and configured media servers.</div>';
+                    section.innerHTML = '<h2 class="sectionTitle sectionTitle-cards focuscontainer-x padded-left padded-right">Search Results</h2><div class="localIspSearchMessage">Enter at least two characters to search.</div>';
                     return;
                 }
-                section.innerHTML = '<h2 class="sectionTitle sectionTitle-cards focuscontainer-x padded-left padded-right">Search Results</h2><div class="localIspSearchMessage">Searching your library and media servers…</div>';
+                section.innerHTML = '<h2 class="sectionTitle sectionTitle-cards focuscontainer-x padded-left padded-right">Search Results</h2><div class="localIspSearchMessage">Searching media sources…</div>';
                 const mediaTypes = filter ? [filter] : ['movie', 'series', 'anime'];
                 const settled = await Promise.allSettled(mediaTypes.map((mediaType) => pluginCall('Remote/Search', 'POST', { mediaType, query })
                     .then((rows) => rows.map((row) => ({ name:value(row, 'Name'), url:value(row, 'Url'), source:value(row, 'Source'), posterUrl:value(row, 'PosterUrl'), mediaType })) )));
                 if (sequence !== nativeSearchSequence || !window.location.hash.startsWith('#/search')) return;
-                await localSearch;
-                if (sequence !== nativeSearchSequence || !window.location.hash.startsWith('#/search')) return;
                 const results = settled.flatMap((result) => result.status === 'fulfilled' ? result.value : [])
                     .filter((item, index, all) => all.findIndex((other) => other.url === item.url && other.mediaType === item.mediaType) === index);
-                renderRemoteResults(results);
                 if (settled.every((result) => result.status === 'rejected')) {
-                    const message = document.createElement('p');
-                    message.className = 'localIspSearchMessage';
-                    message.textContent = settled[0].reason.message;
-                    section.appendChild(message);
+                    nativeRemoteStatus = settled[0].reason.message || 'Media servers could not be searched.';
                 }
+                renderRemoteResults(results);
             }
 
             async function searchLocalLibrary(query, sequence, filter) {
@@ -467,16 +590,9 @@ public sealed class ClientScriptController : ControllerBase
                 }).filter(item => !filter || item.category === filter));
             }
 
-            async function openIndexedItem(item) {
-                try {
-                    const player = window.playbackManager || window.PlaybackManager;
-                    if ((item.Type === 'Movie' || item.Type === 'Episode') && player?.play) {
-                        await player.play({items:[item]});
-                        return;
-                    }
-                } catch (_) {}
-                if (window.Dashboard?.navigate) Dashboard.navigate('details?id=' + encodeURIComponent(item.Id));
-                else window.location.hash = '#/details?id=' + encodeURIComponent(item.Id);
+            function openIndexedItem(id) {
+                if (window.Dashboard?.navigate) Dashboard.navigate('details?id=' + encodeURIComponent(id));
+                else window.location.hash = '#/details?id=' + encodeURIComponent(id);
             }
 
             function attachNativeSearch() {
@@ -493,7 +609,21 @@ public sealed class ClientScriptController : ControllerBase
                 if (!input || input === nativeSearchInput) return;
                 nativeSearchInput = input;
                 const select = document.querySelector('#localIspNativeMediaType');
+                const source = document.querySelector('#localIspNativeSource');
+                source.value = nativeSource;
                 select.value = nativeMediaType;
+                if (!select.value) nativeMediaType = '';
+                canManageTorrents ??= pluginCall('CanManage').then(() => true, () => false);
+                canManageTorrents.then(async (canManage) => {
+                    if (!canManage) return;
+                    const availability = await pluginCall('SourceAvailability');
+                    if (select.isConnected && value(availability, 'TorrentEnabled') && value(availability, 'AdultTorrentModeEnabled')) {
+                        const option = document.createElement('option');
+                        option.value = 'adult';
+                        option.textContent = 'Adult torrents';
+                        select.append(option);
+                    }
+                }).catch(() => {});
                 const search = (delay) => {
                     clearTimeout(nativeSearchTimer);
                     const sequence = ++nativeSearchSequence;
@@ -501,13 +631,25 @@ public sealed class ClientScriptController : ControllerBase
                         const query = input.value.trim();
                         nativeLocalItems = [];
                         nativeRemoteItems = [];
-                        const localSearch = query.length >= 2 && searchLocalLibrary(query, sequence, nativeMediaType).catch(() => {});
-                        searchRemoteSources(query, sequence, nativeMediaType, localSearch);
+                        nativeRemoteStatus = '';
+                        nativeTorrentGroups = [];
+                        nativeTorrentStatus = '';
+                        const torrentOnly = nativeMediaType === 'adult' || nativeMediaType === 'other';
+                        if (!nativeSource && !torrentOnly && query.length >= 2) searchLocalLibrary(query, sequence, nativeMediaType).catch(() => {});
+                        if ((!torrentOnly && nativeSource !== 'torrent') || query.length < 2) searchRemoteSources(query, sequence, nativeMediaType);
+                        else renderCombinedResults();
+                        if (query.length >= 2 && nativeSource !== 'ftp') searchNativeTorrents(query, sequence, nativeMediaType);
                     }, delay);
                 };
                 input.addEventListener('input', () => search(450));
                 select.addEventListener('change', () => {
                     nativeMediaType = select.value;
+                    if (nativeSource === 'ftp' && ['adult', 'other'].includes(nativeMediaType)) source.value = nativeSource = 'torrent';
+                    search(0);
+                });
+                source.addEventListener('change', () => {
+                    nativeSource = source.value;
+                    if (nativeSource === 'ftp' && ['adult', 'other'].includes(nativeMediaType)) select.value = nativeMediaType = '';
                     search(0);
                 });
                 setTimeout(() => input.focus(), 50);

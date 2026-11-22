@@ -109,6 +109,12 @@ public sealed partial class LinkAdderService
         };
     }
 
+    internal static PreviewResult PlanTorrentStreams(string title, string mediaType, IReadOnlyList<Uri> videos)
+    {
+        var name = CleanName(title);
+        return new PreviewResult(name, MakePlan(videos, mediaType == "anime" ? "series" : mediaType, name));
+    }
+
     public async Task<AddResult> DownloadAsync(PreviewResult preview,string outputRoot,CancellationToken ct,Action<double,string>? progress=null)
     {
         var created=new List<string>(); var skipped=new List<string>();
@@ -207,8 +213,7 @@ public sealed partial class LinkAdderService
     {
         using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(TimeSpan.FromSeconds(20));
-        try{return await IndexRootAsync(root,mediaType,timeout.Token).ConfigureAwait(false);}
-        catch(TaskCanceledException) when(!ct.IsCancellationRequested){return [];}
+        return await IndexRootAsync(root,mediaType,timeout.Token).ConfigureAwait(false);
     }
 
     private async Task<IReadOnlyList<IndexedTitle>> IndexRootAsync(RemoteRoot root,string mediaType,CancellationToken ct)
@@ -216,24 +221,33 @@ public sealed partial class LinkAdderService
         var results=new List<IndexedTitle>();
         var visited=new HashSet<string>(StringComparer.Ordinal);
         var pages=new[]{root.Url};
+        var isFtp = root.Url.Scheme == Uri.UriSchemeFtp;
         using var concurrency=new SemaphoreSlim(8,8);
-        for(var depth=0;depth<=2&&pages.Length>0&&visited.Count<300;depth++)
+        for(var depth=0;depth<=2&&pages.Length>0&&visited.Count<300&&!ct.IsCancellationRequested;depth++)
         {
             var remaining=300-visited.Count;
             var current=pages.Where(page=>!visited.Contains(page.AbsoluteUri)).Take(remaining).ToArray();
             foreach (var page in current) visited.Add(page.AbsoluteUri);
             var loads=current.Select(async page=>
             {
-                await concurrency.WaitAsync(ct).ConfigureAwait(false);
-                try{return (Page:page,Links:await ListSearchLinksAsync(page,root,ct).ConfigureAwait(false));}
-                catch(Exception ex) when(ex is WebException or HttpRequestException or TaskCanceledException&&!ct.IsCancellationRequested){return (Page:page,Links:(IReadOnlyList<Uri>)[]);}
-                finally{concurrency.Release();}
+                try
+                {
+                    await concurrency.WaitAsync(ct).ConfigureAwait(false);
+                    try { return await ListSearchLinksAsync(page, root, ct).ConfigureAwait(false); }
+                    finally { concurrency.Release(); }
+                }
+                catch (Exception ex) when (ex is WebException or HttpRequestException or OperationCanceledException)
+                {
+                    if (ex is WebException webException) webException.Response?.Dispose();
+                    return (IReadOnlyList<Uri>)[];
+                }
             });
             var loaded=await Task.WhenAll(loads).ConfigureAwait(false);
             var next=new List<Uri>();
+            var otherFtpFolders = new List<Uri>();
             foreach(var group in loaded)
             {
-                foreach(var link in group.Links)
+                foreach(var link in group)
                 {
                     if (!IsWithin(root.Url, link)) continue;
                     var name = Uri.UnescapeDataString(Path.GetFileName(link.AbsolutePath.TrimEnd('/')));
@@ -248,9 +262,10 @@ public sealed partial class LinkAdderService
                     var structural=IsStructuralFolder(name);
                     if(!structural)results.Add(new(name,NormalizeSearchText(CleanName(name)),link.AbsoluteUri,root.Name,root));
                     if(depth<2&&structural)next.Add(link);
+                    else if (depth < 2 && isFtp) otherFtpFolders.Add(link);
                 }
             }
-            pages=next.DistinctBy(x=>x.AbsoluteUri,StringComparer.Ordinal).ToArray();
+            pages=next.Concat(otherFtpFolders).DistinctBy(x=>x.AbsoluteUri,StringComparer.Ordinal).ToArray();
         }
         return results;
     }
@@ -260,7 +275,7 @@ public sealed partial class LinkAdderService
         using var concurrency=new SemaphoreSlim(8,8);
         var tasks=matches.Select(async (item,index)=>
         {
-            if(index>=24 || IsVideo(new Uri(item.Url)))return new RemoteSearchResult(item.Name,item.Url,item.Source,string.Empty);
+            if(index>=24 || item.Root.Url.Scheme == Uri.UriSchemeFtp || IsVideo(new Uri(item.Url)))return new RemoteSearchResult(item.Name,item.Url,item.Source,string.Empty);
             await concurrency.WaitAsync(ct).ConfigureAwait(false);
             try{return new RemoteSearchResult(item.Name,item.Url,item.Source,await FindPosterAsync(new Uri(item.Url),item.Root,ct).ConfigureAwait(false));}
             finally{concurrency.Release();}

@@ -27,6 +27,7 @@ if (Test-Path -LiteralPath $packagePath) {
 $packageFiles = @(
     (Join-Path $publishDirectory 'Jellyfin.Plugin.LinkAdder.dll'),
     (Join-Path $publishDirectory 'Jellyfin.Plugin.LinkAdder.deps.json'),
+    (Join-Path $publishDirectory 'AngleSharp.dll'),
     (Join-Path $publishDirectory 'meta.json')
 )
 Compress-Archive -LiteralPath $packageFiles -DestinationPath $packagePath -CompressionLevel Optimal

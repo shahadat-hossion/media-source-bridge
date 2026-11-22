@@ -8,6 +8,15 @@
 <div id="ftpAccessError">Administrator access is required to manage media sources.</div>
 <div id="ftpManager" style="display:none">
 <section class="ftpPanel">
+<h3>Source Availability</h3>
+<label class="ftpCheck"><input id="ftpSourcesEnabled" type="checkbox" disabled> Use media servers (FTP, HTTP, HTTPS)</label>
+<label class="ftpCheck"><input id="torrentSourcesEnabled" type="checkbox" disabled> Use torrent sources</label>
+<label class="ftpCheck"><input id="adultTorrentModeEnabled" type="checkbox" disabled> Enable 18+ torrent mode</label>
+<p class="ftpMuted">Adds an Adult torrents search filter for administrators while torrent sources are enabled.</p>
+<p class="ftpMuted">Changes save immediately. Connection tests remain available for paused sources.</p>
+<p id="sourceAvailabilityStatus" role="status"></p>
+</section>
+<section class="ftpPanel">
 <h3>Default Save Locations</h3>
 <p class="ftpMuted">Choose where movies, shows, and anime are saved. Discover, Search, Import Link, Add Media, and downloads use these libraries automatically.</p>
 <div class="ftpRow"><div class="selectContainer"><label class="selectLabel">Movies destination</label><select id="searchMovieLibrary" is="emby-select"></select></div><div class="selectContainer"><label class="selectLabel">Shows destination</label><select id="searchSeriesLibrary" is="emby-select"></select></div></div>
@@ -22,12 +31,37 @@
 <div class="ftpActions"><button is="emby-button" class="raised" id="testSourceBtn"><span>Test connection</span></button><button is="emby-button" class="raised button-submit" id="saveSourceBtn"><span>Add server</span></button></div>
 <p id="sourceTestStatus" class="ftpMuted" aria-live="polite"></p>
 </section>
-<section class="ftpPanel">
-<h3>Configured Servers</h3>
+<details class="ftpPanel" id="configuredServers">
+<summary style="cursor:pointer"><strong>Configured Servers</strong></summary>
 <div class="ftpActions"><button is="emby-button" class="raised" id="testAllSourcesBtn"><span>Test all servers</span></button><button is="emby-button" class="raised" id="exportSourcesBtn"><span>Export servers</span></button><button is="emby-button" class="raised" id="importSourcesBtn"><span>Import servers</span></button><input id="importSourcesFile" type="file" accept="application/json,.json" hidden></div>
 <label class="ftpCheck"><input id="exportCredentials" type="checkbox"> Include saved usernames and passwords in export</label>
 <p class="ftpMuted">Imports merge new servers and skip entries with a matching URL and media type.</p>
 <div id="sourceList"></div>
+</details>
+<section class="ftpPanel">
+<h3>Torrent Providers</h3>
+<details id="torrentCatalog">
+<summary><strong>Browse Providers</strong></summary>
+<div class="ftpRow" style="margin-top:1rem">
+<div class="inputContainer"><label class="inputLabel" for="torrentCatalogQuery">Find a provider</label><input id="torrentCatalogQuery" is="emby-input" autocomplete="off"></div>
+<div class="selectContainer"><label class="selectLabel" for="torrentCatalogCategory">Media type</label><select id="torrentCatalogCategory" is="emby-select"><option value="">All media</option><option value="movie">Movies</option><option value="series">Shows</option><option value="anime">Anime</option><option value="adult">Adult</option></select></div>
+</div>
+<div id="torrentCatalogResults"></div>
+</details>
+<details style="margin-top:1rem">
+<summary><strong>Add Custom Torznab</strong></summary>
+<div style="margin-top:1rem">
+<div class="ftpRow">
+<div class="inputContainer"><label class="inputLabel" for="torrentProviderName">Provider name</label><input id="torrentProviderName" is="emby-input" maxlength="80"></div>
+<div class="inputContainer"><label class="inputLabel" for="torrentProviderEndpoint">Torznab API endpoint</label><input id="torrentProviderEndpoint" is="emby-input" inputmode="url" maxlength="2048" autocomplete="off"></div>
+</div>
+<div class="inputContainer"><label class="inputLabel" for="torrentProviderKey">API key (optional)</label><input id="torrentProviderKey" is="emby-input" type="password" maxlength="512" autocomplete="new-password"></div>
+<div class="ftpActions"><button is="emby-button" class="raised" id="testTorrentProvider">Test connection</button><button is="emby-button" class="raised button-submit" id="saveTorrentProvider">Add provider</button></div>
+</div>
+</details>
+<p id="torrentProviderStatus" role="status"></p>
+<h4>Configured Providers</h4>
+<div id="torrentProviderList"></div>
 </section>
 </div>
 <p id="ftpStatus" style="min-height:1.5em;font-weight:600" aria-live="polite"></p>
@@ -37,7 +71,145 @@ const call=async(path,method,body)=>{try{return await ApiClient.ajax({url:ApiCli
 const val=(x,k)=>x?.[k[0].toLowerCase()+k.slice(1)]??x?.[k];
 function fillLibrarySelect(selector,libraries,mediaType,selected){let options=libraries.filter(x=>x.mediaType===mediaType);q(selector).innerHTML='<option value="">Choose a library</option>'+options.map(x=>'<option value="'+esc(x.path)+'" '+(x.path===selected?'selected':'')+'>'+esc(x.name)+'</option>').join('')}
 async function loadSearchDestinations(){let rawLibraries=await call('Libraries','GET'),libraries=rawLibraries.map(x=>({name:val(x,'Name'),path:val(x,'Path'),mediaType:val(x,'MediaType')})),settings=await call('SearchDestinations','GET');fillLibrarySelect('#searchMovieLibrary',libraries,'movie',val(settings,'MovieLibraryPath'));fillLibrarySelect('#searchSeriesLibrary',libraries,'series',val(settings,'SeriesLibraryPath'));fillLibrarySelect('#searchAnimeLibrary',libraries,'anime',val(settings,'AnimeLibraryPath'))}
-async function loadPage(){q('#ftpManager').style.display='none';q('#ftpAccessError').style.display='none';try{await call('CanManage','GET');q('#ftpManager').style.display='';await Promise.all([loadSources(),loadSearchDestinations()])}catch(e){q('#ftpAccessError').style.display='block';q('#ftpStatus').textContent=e.message}}
+async function loadPage(){q('#ftpManager').style.display='none';q('#ftpAccessError').style.display='none';try{await call('CanManage','GET');q('#ftpManager').style.display='';await Promise.all([loadSources(),loadSearchDestinations(),loadSourceAvailability(),loadTorrentProviders().catch(e=>{q('#torrentProviderStatus').textContent=e.message})])}catch(e){q('#ftpAccessError').style.display='block';q('#ftpStatus').textContent=e.message}}
+const sourceSwitches=[['#ftpSourcesEnabled','FtpEnabled','Media servers'],['#torrentSourcesEnabled','TorrentEnabled','Torrent sources'],['#adultTorrentModeEnabled','AdultTorrentModeEnabled','18+ torrent mode']];
+const availabilityStatus=q('#sourceAvailabilityStatus');
+async function loadSourceAvailability(){
+    try{
+        const saved=await call('SourceAvailability','GET');
+        for(const [selector,field] of sourceSwitches){
+            q(selector).checked=val(saved,field);
+            q(selector).disabled=false;
+        }
+    }catch(error){availabilityStatus.textContent=error.message}
+}
+for(const [selector,field,label] of sourceSwitches){
+    const input=q(selector);
+    input.onchange=async()=>{
+        const enabled=input.checked;
+        input.disabled=true;
+        try{
+            const settings=await call('SourceAvailability','POST',{[field]:enabled});
+            input.checked=val(settings,field);
+            availabilityStatus.textContent=label+(input.checked?' enabled.':' disabled.');
+        }catch(error){
+            input.checked=!enabled;
+            availabilityStatus.textContent=error.message;
+        }finally{input.disabled=false}
+    };
+}
+const providerFields=['Name','Endpoint','ApiKey'];
+const providerInput=id=>q('#torrentProvider'+({ApiKey:'Key'}[id]??id));
+const providerStatus=q('#torrentProviderStatus');
+const catalog=q('#torrentCatalog'),catalogResults=q('#torrentCatalogResults');
+let catalogEntries=[];
+const catalogTestStates=new Map();
+function showTestState(button,state,label='Test'){
+    button.classList.toggle('ftpButtonSuccess',state==='available');
+    button.classList.toggle('ftpButtonFailed',state==='unavailable');
+    button.textContent={testing:'Testing…',available:'Available',unavailable:'Unavailable'}[state]??label;
+}
+function setCatalogTestState(id,state){
+    catalogTestStates.set(id,state);
+    const button=[...catalogResults.querySelectorAll('[data-test]')].find(item=>item.dataset.test===id);
+    if(button){
+        showTestState(button,state);
+        button.disabled=state==='testing';
+    }
+}
+function renderCatalog(){
+    const query=q('#torrentCatalogQuery').value.trim().toLowerCase(), category=q('#torrentCatalogCategory').value;
+    const labels={movie:'Movies',series:'Shows',anime:'Anime',adult:'Adult'};
+    const matches=catalogEntries.filter(entry=>
+        (!category||val(entry,'Categories').includes(category)) &&
+        (val(entry,'Name')+' '+val(entry,'Description')).toLowerCase().includes(query));
+    catalogResults.innerHTML=matches.length?matches.map(entry=>{
+        const id=esc(val(entry,'Id')),added=val(entry,'Added'),name=esc(val(entry,'Name'));
+        const media=val(entry,'Categories').map(value=>labels[value]).join(' · ');
+        return '<div class="ftpSource"><div class="ftpSourceText"><strong>'+name+'</strong><div class="ftpMuted">'+
+            esc(media)+' · Public</div><div>'+esc(val(entry,'Description'))+'</div></div><div class="ftpActions">'+
+            '<button type="button" is="emby-button" class="raised" data-test="'+id+'" aria-label="Test '+name+'">Test</button>'+
+            '<button type="button" is="emby-button" class="raised button-submit" data-add="'+id+'" aria-label="'+
+            (added?'Added ':'Add ')+name+'" '+(added?'disabled':'')+'>'+(added?'Added':'Add')+'</button></div></div>';
+    }).join(''):'<p class="ftpMuted">No providers match these filters.</p>';
+    for(const button of catalogResults.querySelectorAll('button')){
+        if(button.dataset.test){
+            const state=catalogTestStates.get(button.dataset.test);
+            showTestState(button,state);
+            button.disabled=state==='testing';
+        }
+        button.onclick=async()=>{
+            const test=Boolean(button.dataset.test);
+            const catalogId=button.dataset.test??button.dataset.add;
+            button.disabled=true;
+            if(test)setCatalogTestState(catalogId,'testing');
+            providerStatus.textContent=test?'Testing provider…':'Adding provider…';
+            try{
+                const result=await call('TorrentProviders'+(test?'/Test':''),'POST',{catalogId});
+                if(test)setCatalogTestState(catalogId,'available');
+                if(!test)await Promise.all([loadTorrentProviders(),loadCatalog()]);
+                providerStatus.textContent=test?val(result,'Message'):'Provider added.';
+            }catch(error){
+                if(test)setCatalogTestState(catalogId,'unavailable');
+                providerStatus.textContent=error.message;
+            }finally{button.disabled=false}
+        };
+    }
+}
+async function loadCatalog(){
+    catalogResults.textContent='Loading providers…';
+    try{
+        catalogEntries=await call('TorrentProviders/Catalog','GET');
+        renderCatalog();
+    }catch(error){catalogResults.textContent=error.message}
+}
+catalog.ontoggle=()=>{if(catalog.open)loadCatalog()};
+q('#torrentCatalogQuery').oninput=renderCatalog;
+q('#torrentCatalogCategory').onchange=renderCatalog;
+async function loadTorrentProviders(){
+    const list=q('#torrentProviderList');
+    const providers=await call('TorrentProviders','GET');
+    list.innerHTML=providers.length?providers.map(provider=>'<div class="ftpSource"><div class="ftpSourceText"><strong>'+esc(val(provider,'Name'))+'</strong><div class="ftpMuted">'+(val(provider,'CatalogId')?'Built-in provider':esc(val(provider,'Endpoint')))+(val(provider,'HasApiKey')?' · API key saved':'')+'</div></div><button type="button" class="raised" is="emby-button" data-provider="'+esc(val(provider,'Id'))+'">Remove</button></div>').join(''):'<p class="ftpMuted">No torrent providers configured.</p>';
+    list.querySelectorAll('button').forEach(button=>button.onclick=async()=>{
+        if(!confirm('Remove this torrent provider?'))return;
+        button.disabled=true;
+        try{
+            await call('TorrentProviders/'+encodeURIComponent(button.dataset.provider),'DELETE');
+            await Promise.all([loadTorrentProviders(),catalog.open?loadCatalog():null]);
+            providerStatus.textContent='Provider removed.';
+        }catch(error){providerStatus.textContent=error.message;button.disabled=false}
+    });
+}
+async function submitProvider(test){
+    const buttons=[q('#testTorrentProvider'),q('#saveTorrentProvider')];
+    const body=Object.fromEntries(providerFields.map(field=>[field,providerInput(field).value]));
+    buttons.forEach(button=>button.disabled=true);
+    providerFields.forEach(field=>providerInput(field).disabled=true);
+    if(test)showTestState(buttons[0],'testing');
+    providerStatus.textContent=test?'Testing the Torznab endpoint…':'Adding provider…';
+    try{
+        const result=await call('TorrentProviders'+(test?'/Test':''),'POST',body);
+        if(test)showTestState(buttons[0],'available');
+        if(!test){
+            providerFields.forEach(field=>providerInput(field).value='');
+            showTestState(buttons[0],null,'Test connection');
+            await loadTorrentProviders();
+        }
+        providerStatus.textContent=test?val(result,'Message'):'Provider added.';
+    }catch(error){
+        if(test)showTestState(buttons[0],'unavailable');
+        providerStatus.textContent=error.message;
+    }
+    finally{
+        buttons.forEach(button=>button.disabled=false);
+        providerFields.forEach(field=>providerInput(field).disabled=false);
+    }
+}
+q('#testTorrentProvider').onclick=()=>submitProvider(true);
+q('#saveTorrentProvider').onclick=()=>submitProvider(false);
+for(const field of providerFields){
+    providerInput(field).addEventListener('input',()=>showTestState(q('#testTorrentProvider'),null,'Test connection'));
+}
 async function loadSources(){try{let raw=await call('Sources','GET'),items=raw.map(x=>({id:x.id??x.Id,name:x.name??x.Name,url:x.url??x.Url,mediaType:x.mediaType??x.MediaType,hasCredentials:x.hasCredentials??x.HasCredentials}));q('#testAllSourcesBtn').disabled=!items.length;q('#sourceList').innerHTML=items.length?items.map(x=>'<div class="ftpSource" data-source-id="'+esc(x.id)+'"><div class="ftpSourceText"><strong>'+esc(x.name)+'</strong><div class="ftpMuted">'+esc(x.mediaType)+' · '+esc(x.url)+(x.hasCredentials?' · credentials saved':'')+'</div><div class="ftpMuted ftpSourceResult" aria-live="polite"></div></div><button is="emby-button" class="raised ftpDeleteSource" data-id="'+esc(x.id)+'">Remove</button></div>').join(''):'<p class="ftpMuted">No servers configured.</p>';q('#sourceList').querySelectorAll('.ftpDeleteSource').forEach(b=>b.onclick=async()=>{if(!confirm('Remove this server?'))return;try{await call('Sources/'+encodeURIComponent(b.dataset.id),'DELETE');await loadSources();q('#ftpStatus').textContent='Server removed.'}catch(e){q('#ftpStatus').textContent=e.message}})}catch(e){q('#ftpStatus').textContent=e.message}}
 p.addEventListener('viewshow',loadPage);p.addEventListener('pageshow',loadPage);loadPage();
 const resetTest=()=>{let b=q('#testSourceBtn');b.classList.remove('ftpButtonSuccess','ftpButtonFailed');b.querySelector('span').textContent='Test connection';q('#sourceTestStatus').textContent=''};

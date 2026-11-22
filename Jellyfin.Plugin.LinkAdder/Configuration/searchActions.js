@@ -30,17 +30,18 @@ function existingItem(item, mediaType, localItems) {
 }
 
 const states = {
-    add: ['add', 'Add'],
+    add: ['add', 'FTP'],
     adding: ['downloading', 'Adding…'],
     indexing: ['downloading', 'Indexing…'],
     pending: ['refresh', 'Check again'],
-    failed: ['add', 'Retry add'],
+    failed: ['add', 'Retry Add'],
     ready: ['play_arrow', 'Play']
 };
 
 function paint(button, state) {
     const [icon, label] = states[state.phase];
     const busy = state.phase === 'adding' || state.phase === 'indexing';
+    button.dataset.linkAdderPhase = state.phase;
     button.disabled = busy;
     button.title = state.message || label;
     button.setAttribute('aria-busy', String(busy));
@@ -71,36 +72,57 @@ function transition(job, phase, message = '') {
     if (phase === 'ready' || phase === 'pending' || phase === 'failed') job.buttons.clear();
 }
 
-async function waitForIndexedItem(mediaType, added) {
+export async function waitForIndexedItem(mediaType, added) {
     const folder = pathKey(value(added, 'TitlePath'));
     const files = new Set([...(value(added, 'Created') || []), ...(value(added, 'Skipped') || [])].map(pathKey));
     const title = value(added, 'Title');
     const query = title?.replace(/\s*\((?:19|20)\d{2}\).*$/, '') || title;
+    const matches = entry => mediaType === 'movie' ? files.has(pathKey(entry.Path)) : folder && folder === pathKey(entry.Path);
+    const userId = ApiClient.getCurrentUserId();
+    const itemType = mediaType === 'movie' ? 'Movie' : 'Series';
     const deadline = Date.now() + 90000;
+    let attempts = 0;
     while (Date.now() < deadline) {
-        const result = await ApiClient.getItems(ApiClient.getCurrentUserId(), {
-            SearchTerm:query, IncludeItemTypes:mediaType === 'movie' ? 'Movie' : 'Series', Recursive:true, Limit:50, Fields:'Path'
+        const result = await ApiClient.getItems(userId, {
+            SearchTerm:query, IncludeItemTypes:itemType, Recursive:true, Limit:50, Fields:'Path'
         });
-        const match = (result.Items || []).find(entry => mediaType === 'movie'
-            ? files.has(pathKey(entry.Path)) : folder && folder === pathKey(entry.Path));
+        const match = (result.Items || []).find(matches);
         if (match) return match;
+        if (++attempts % 3 === 0) {
+            const recent = await ApiClient.getItems(userId, {
+                IncludeItemTypes:itemType, Recursive:true, SortBy:'DateCreated', SortOrder:'Descending', Limit:75, Fields:'Path'
+            });
+            const exactPath = (recent.Items || []).find(matches);
+            if (exactPath) return exactPath;
+        }
         await new Promise(resolve => setTimeout(resolve, 2500));
     }
     return null;
 }
 
-async function play(item) {
-    try {
-        const player = window.playbackManager || window.PlaybackManager;
-        if (player?.play) {
-            await player.play({items:[item]});
-            return;
-        }
-    } catch (_) {}
+export function openItem(item) {
     const destination = 'details?id=' + encodeURIComponent(item.Id);
     if (window.Dashboard?.navigate) window.Dashboard.navigate(destination);
     else window.location.hash = '#/' + destination;
 }
+
+export async function playItem(item){
+    const player=window.playbackManager||window.PlaybackManager;
+    if(player?.play){
+        try{await player.play({items:[item]});return}catch(_){}
+    }
+    openItem(item);
+    const route='details?id='+encodeURIComponent(item.Id);
+    for(let attempt=0;attempt<75;attempt++){
+        if(window.location.hash.includes(route)){
+            const button=[...document.querySelectorAll('#itemDetailPage button[data-action="play"],#itemDetailPage button[data-action="resume"]')]
+                .find(element=>!element.disabled && element.getClientRects().length);
+            if(button){button.click();return}
+        }
+        await new Promise(resolve=>setTimeout(resolve,200));
+    }
+}
+
 
 function ensureStyles() {
     if (document.getElementById('linkAdderActionStyles')) return;
@@ -123,18 +145,18 @@ export function bind(button, item, localItems, call) {
     const key = JSON.stringify([ApiClient.getCurrentUserId(), mediaType, item.url]);
     const existing = existingItem(item, mediaType, localItems || []);
     const initial = jobs.get(key);
-    if (initial?.phase === 'adding' || initial?.phase === 'indexing') initial.buttons.add(button);
-    paint(button, initial || {phase:existing ? 'ready' : 'add'});
+    if (!existing && (initial?.phase === 'adding' || initial?.phase === 'indexing')) initial.buttons.add(button);
+    paint(button, existing ? {phase:'ready'} : initial || {phase:'add'});
 
     button.onclick = async () => {
         let job = jobs.get(key);
-        if (!job && existing) return play(existing);
+        if (existing) return playItem(existing);
         if (!job) {
             job = {phase:'add', buttons:new Set()};
             jobs.set(key, job);
         }
+        if (job.phase === 'ready') return playItem(job.item);
         job.buttons.add(button);
-        if (job.phase === 'ready') return play(job.item);
         if (job.phase === 'adding' || job.phase === 'indexing') return;
         if (!job.added) {
             transition(job, 'adding');
@@ -148,5 +170,15 @@ export function bind(button, item, localItems, call) {
         transition(job, 'indexing');
         job.item = await waitForIndexedItem(mediaType, job.added).catch(() => null);
         transition(job, job.item ? 'ready' : 'pending', job.item ? '' : 'STRM files are ready. Jellyfin is still indexing this title.');
+    };
+}
+
+export function bindPoster(poster, button, title) {
+    poster.onclick = () => {
+        if (button.disabled) return;
+        const phase = button.dataset.linkAdderPhase;
+        if (phase === 'ready' || phase === 'pending' || window.confirm('Add “' + title + '” to Jellyfin?')) {
+            button.click();
+        }
     };
 }

@@ -7,6 +7,33 @@ using MediaBrowser.Model.Serialization;
 namespace Jellyfin.Plugin.LinkAdder;
 public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
 {
+    internal static object ConfigurationSync { get; } = new();
+
+    internal static CustomSource[] GetSourceSnapshot(bool includeDisabled = false)
+    {
+        lock (ConfigurationSync)
+        {
+            if (Instance?.Configuration is not { } configuration) return [];
+            return includeDisabled || configuration.FtpSourcesEnabled ? configuration.CustomSources.ToArray() : [];
+        }
+    }
+
+    internal static bool MediaServerSourcesEnabled
+    {
+        get
+        {
+            lock (ConfigurationSync) return Instance?.Configuration.FtpSourcesEnabled ?? true;
+        }
+    }
+
+    internal static bool TorrentSourcesEnabled
+    {
+        get
+        {
+            lock (ConfigurationSync) return Instance?.Configuration.TorrentSourcesEnabled ?? true;
+        }
+    }
+
     public static Plugin? Instance { get; private set; }
     public override string Name => "Media Source Bridge";
     public override string Description => "Search private media servers, import links, and add movies, shows, or anime to Jellyfin as streams or local files.";

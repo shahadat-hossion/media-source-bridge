@@ -6,4 +6,5 @@ obj/
 Import-ImdbTop250.ps1
 .vs/
 .idea/
+node_modules/
 

@@ -9,7 +9,6 @@ namespace Jellyfin.Plugin.LinkAdder.Services;
 public sealed partial class AutomationService
 {
     private static readonly SemaphoreSlim RunLock = new(1, 1);
-    private static readonly object ConfigurationLock = new();
     private readonly IHttpClientFactory _clients;
     private readonly ILibraryManager _library;
     private readonly DiscoveryService _discovery;
@@ -23,8 +22,7 @@ public sealed partial class AutomationService
 
     public async Task WarmSearchIndexesAsync(CancellationToken ct)
     {
-        var configuration = Plugin.Instance?.Configuration ?? throw new InvalidOperationException("Plugin configuration is unavailable.");
-        var service = new LinkAdderService(_clients.CreateClient(), configuration.CustomSources);
+        var service = new LinkAdderService(_clients.CreateClient(), Plugin.GetSourceSnapshot());
         await service.WarmSearchIndexesAsync(ct).ConfigureAwait(false);
     }
 
@@ -35,7 +33,7 @@ public sealed partial class AutomationService
         try
         {
             var configuration = Plugin.Instance?.Configuration ?? throw new InvalidOperationException("Plugin configuration is unavailable.");
-            var service = new LinkAdderService(_clients.CreateClient(), configuration.CustomSources);
+            var service = new LinkAdderService(_clients.CreateClient(), Plugin.GetSourceSnapshot());
             var matches = await FindExactMatchesAsync(service, title, ct).ConfigureAwait(false);
             if (matches.Count == 0)
                 return new(ToCandidate(title, "unmatched", "No title match was found on configured private servers."), []);
@@ -53,7 +51,7 @@ public sealed partial class AutomationService
                     ?? throw new InvalidOperationException("The selected title is no longer available in the search results.");
             }
 
-            var path = LibraryPath(configuration.SearchDestinations, title.MediaType);
+            var path = configuration.SearchDestinations.GetLibraryPath(title.MediaType);
             if (!IsCompatibleLibraryPath(path, title.MediaType))
                 return new(ToCandidate(title, "failed", "No compatible destination library is configured."), []);
 
@@ -62,7 +60,7 @@ public sealed partial class AutomationService
             if (write.Created.Count == 0)
                 return new(ToCandidate(title, "skipped", "Matching STRM files already exist.", match.Url, match.Source), []);
 
-            lock (ConfigurationLock)
+            lock (Plugin.ConfigurationSync)
             {
                 configuration.AutomationAddedItems.RemoveAll(x => x.ContentId.Equals(title.ContentId, StringComparison.OrdinalIgnoreCase));
                 configuration.AutomationAddedItems.Add(new AutomationAddedItem { ContentId = title.ContentId, Title = title.Title, MediaType = title.MediaType, Files = write.Created.ToList() });
@@ -86,13 +84,20 @@ public sealed partial class AutomationService
         try
         {
             var configuration = Plugin.Instance?.Configuration ?? throw new InvalidOperationException("Plugin configuration is unavailable.");
-            ReconcileDeletedItems(configuration);
-            var options = configuration.Automation;
+            AutomationOptions options;
+            HashSet<string> excluded;
+            HashSet<string> alreadyAdded;
+            lock (Plugin.ConfigurationSync)
+            {
+                ReconcileDeletedItems(configuration);
+                options = configuration.Automation;
+                excluded = configuration.AutomationExcludedIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+                alreadyAdded = configuration.AutomationAddedItems.Select(x => x.ContentId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            }
+
             var previewOnly = forcePreview || options.PreviewOnly;
             var discovered = await _discovery.DiscoverAsync(options, ct).ConfigureAwait(false);
-            var excluded = configuration.AutomationExcludedIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var alreadyAdded = configuration.AutomationAddedItems.Select(x => x.ContentId).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var service = new LinkAdderService(_clients.CreateClient(), configuration.CustomSources);
+            var service = new LinkAdderService(_clients.CreateClient(), Plugin.GetSourceSnapshot());
             var results = new List<AutomationCandidate>();
             var addedAny = false;
 
@@ -131,7 +136,7 @@ public sealed partial class AutomationService
                         continue;
                     }
 
-                    var path = LibraryPath(configuration.SearchDestinations, title.MediaType);
+                    var path = configuration.SearchDestinations.GetLibraryPath(title.MediaType);
                     if (!IsCompatibleLibraryPath(path, title.MediaType))
                     {
                         results.Add(ToCandidate(title, "failed", "No compatible destination library is configured."));
@@ -145,7 +150,7 @@ public sealed partial class AutomationService
                         results.Add(ToCandidate(title, "skipped", "Matching STRM files already exist.", match.Url, match.Source));
                         continue;
                     }
-                    lock (ConfigurationLock)
+                    lock (Plugin.ConfigurationSync)
                     {
                         configuration.AutomationAddedItems.Add(new AutomationAddedItem { ContentId = title.ContentId, Title = displayTitle, MediaType = title.MediaType, Files = write.Created.ToList() });
                         AddHistory(configuration, title, "added", $"Created {write.Created.Count} STRM file(s) from {match.Source}.");
@@ -161,9 +166,9 @@ public sealed partial class AutomationService
                 }
             }
 
-            lock (ConfigurationLock)
+            lock (Plugin.ConfigurationSync)
             {
-                options.LastRunUtc = DateTime.UtcNow;
+                configuration.Automation.LastRunUtc = DateTime.UtcNow;
                 foreach (var result in results.Where(x => x.Status is "failed" or "unmatched" or "ambiguous"))
                     AddHistory(configuration, discovered.First(x => x.ContentId == result.ContentId), result.Status, result.Message);
                 TrimHistory(configuration);
@@ -249,14 +254,6 @@ public sealed partial class AutomationService
             };
         });
     }
-
-    private static string LibraryPath(SearchDestinationOptions options, string mediaType) => mediaType switch
-    {
-        "movie" => options.MovieLibraryPath,
-        "series" => options.SeriesLibraryPath,
-        "anime" => options.AnimeLibraryPath,
-        _ => string.Empty
-    };
 
     private static AutomationCandidate ToCandidate(DiscoveryTitle x, string status, string message, string? sourceUrl = null, string? sourceName = null) =>
         new(x.ContentId, x.Category, x.MediaType, x.Title, x.Year, x.Rating, x.Votes, x.PosterUrl, status, message, sourceUrl, sourceName);

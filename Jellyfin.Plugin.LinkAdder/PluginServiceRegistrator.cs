@@ -17,6 +17,8 @@ public sealed class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<IStartupFilter, HeaderButtonStartupFilter>();
         serviceCollection.AddSingleton<DiscoveryService>();
         serviceCollection.AddSingleton<AutomationService>();
+        serviceCollection.AddSingleton<DownloadService>();
         serviceCollection.AddHostedService<AutomationBackgroundService>();
+        serviceCollection.AddHostedService<TorrentBridgeBackgroundService>();
     }
 }

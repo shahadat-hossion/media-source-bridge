@@ -10,6 +10,14 @@
 <button is="emby-button" class="raised button-submit block" id="analyzeBtn"><span>Analyze Link</span></button>
 <p class="silMuted">The URL must be inside a source already configured by an administrator.</p>
 </div>
+<section id="torrentPanel" class="silPanel" hidden>
+<h3>Torrent playback check</h3>
+<div class="inputContainer"><label class="inputLabel" for="torrentMagnet">Magnet link</label><input id="torrentMagnet" is="emby-input" autocomplete="off" maxlength="4096"></div>
+<button is="emby-button" class="raised button-submit block" id="torrentCheck"><span>Check Playback</span></button>
+<p id="torrentStatus" role="status"></p>
+<button is="emby-button" class="raised block" id="torrentShortcut" hidden><span>Save Test STRM</span></button>
+<p class="silMuted">The bridge keeps one test stream in RAM. Checking a different torrent replaces it.</p>
+</section>
 <div id="analysis" style="display:none">
 <div class="inputContainer"><label class="inputLabel">Detected title</label><input id="title" is="emby-input"></div>
 <div class="selectContainer"><label class="selectLabel">Default save location</label><select id="library" is="emby-select" disabled></select></div>
@@ -22,6 +30,47 @@
 <script type="text/javascript">(function(){
 const p=document.querySelector('#LocalIspImportLinkPage'),q=s=>p.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 const call=async(path,method,body)=>{try{return await ApiClient.ajax({url:ApiClient.getUrl('Plugins/LinkAdder/'+path),type:method,dataType:'json',contentType:'application/json',data:body?JSON.stringify(body):undefined})}catch(e){let detail='';try{let parsed=JSON.parse(e.responseText||'{}');detail=parsed.error||parsed.detail||''}catch(_){}throw Error(detail||(e.status===401?'Sign in to Jellyfin and refresh.':'Request failed'+(e.status?' ('+e.status+')':'')))}};
+let torrentResult;
+const torrentStatus=q('#torrentStatus'),torrentCheck=q('#torrentCheck'),torrentShortcut=q('#torrentShortcut');
+q('#torrentMagnet').oninput=()=>{
+    torrentResult=null;
+    torrentShortcut.hidden=true;
+    torrentStatus.textContent='';
+};
+torrentCheck.onclick=async()=>{
+    const magnet=q('#torrentMagnet').value.trim();
+    torrentResult=null;
+    torrentShortcut.hidden=true;
+    if(!magnet){torrentStatus.textContent='Paste a magnet link first.';return}
+    torrentCheck.disabled=true;
+    q('#torrentMagnet').disabled=true;
+    torrentStatus.textContent='Checking the opening video pieces…';
+    try{
+        const result=await call('TorrentPlaybackCheck','POST',{magnet});
+        const label={likelySmooth:'Likely smooth',mayBuffer:'Warning · May buffer',unavailable:'Unavailable'}[result.status];
+        const speeds=result.sampleMbps===undefined?'':' · Sample '+result.sampleMbps.toFixed(1)+' Mbps'
+            +(result.videoMbps===null?'':' / video average '+result.videoMbps.toFixed(1)+' Mbps')
+            +' · '+result.peers+' connected peer(s)';
+        torrentStatus.textContent=label+(result.cached?' · Previous sample':'')+' · '+result.message+(result.fileName?' '+result.fileName+speeds:'');
+        torrentResult=result;
+        torrentShortcut.hidden=!result.streamUrl;
+    }catch(error){
+        torrentStatus.textContent=error.message;
+    }finally{
+        torrentCheck.disabled=false;
+        q('#torrentMagnet').disabled=false;
+    }
+};
+torrentShortcut.onclick=()=>{
+    if(!torrentResult?.streamUrl)return;
+    const url=URL.createObjectURL(new Blob([torrentResult.streamUrl+'\n'],{type:'text/plain'}));
+    const link=document.createElement('a');
+    link.href=url;
+    link.download=torrentResult.fileName.replace(/\.[^.]+$/,'').replace(/[^a-z0-9 ._-]/gi,'_')+'.strm';
+    link.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+};
+call('CanManage','GET').then(()=>{q('#torrentPanel').hidden=false}).catch(()=>{});
 const normalize=x=>({name:x.name??x.Name,path:x.path??x.Path,mediaType:x.mediaType??x.MediaType}),type=()=>q('#mediaType').value;
 const renderLibraries=()=>{let path=(window.silDefaults||{})[type()]||'',item=(window.silLibraries||[]).find(x=>x.mediaType===type()&&x.path===path);q('#library').innerHTML=item?'<option value="'+esc(item.path)+'">'+esc(item.name)+'</option>':'<option value="">Not configured in Media Sources</option>';return !!item};
 const reset=()=>{window.silAnalyzed=null;q('#analysis').style.display='none';q('#status').textContent=''};
