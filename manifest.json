@@ -9,6 +9,14 @@
     "overview": "Search private media sources and add streams or download media to Jellyfin libraries.",
     "versions": [
       {
+        "version": "2.7.10.0",
+        "changelog": "Enforce configured source boundaries and media request ownership, require signed playback, and add bounded cancellable downloads. Update the torrent bridge to the matching release and re-prepare legacy torrent STRM files.",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/shahadat-hossion/media-source-bridge/releases/download/v2.7.10/Media-Source-Bridge-2.7.10.zip",
+        "checksum": "4d100d9367c559d5e9bb8a54b402fcea",
+        "timestamp": "2026-11-22T13:35:57Z"
+      },
+      {
         "version": "2.7.9.0",
         "changelog": "Search media servers and torrent providers together or filter by source. Improve FTP folder indexing, add separate FTP and Torrent buttons, and add experimental torrent playback and media downloads.",
         "targetAbi": "12.0.0.0",
