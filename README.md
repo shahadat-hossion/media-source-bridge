@@ -20,6 +20,15 @@ By default, the plugin creates small `.strm` pointer files. Jellyfin relays HTTP
 > [!IMPORTANT]
 > FTP and HTTP media-library sources must use loopback or a private IPv4 address (`10.x.x.x`, `172.16-31.x.x`, or `192.168.x.x`). The Jellyfin server must be able to route to each source.
 
+## Quick start
+
+1. [Install the plugin](#install-through-the-jellyfin-plugin-catalog) as a Jellyfin administrator.
+2. [Create a library and set its save location](#create-a-library-and-set-its-save-location).
+3. [Connect a private media source](#configure-a-private-media-source).
+4. [Search for a title](#search-and-add-media) or [import a known file or folder](#import-a-file-or-folder).
+
+For torrent playback, also [install the matching torrent bridge](#install-the-torrent-bridge). The bridge is optional for private media and torrent provider search.
+
 ## Features
 
 - Search multiple private FTP, HTTP, and HTTPS directory indexes from Jellyfin.
@@ -44,34 +53,6 @@ By default, the plugin creates small `.strm` pointer files. Jellyfin relays HTTP
 
 Supported video extensions include `.mkv`, `.mp4`, `.avi`, `.mov`, `.m4v`, `.ts`, `.m2ts`, `.webm`, `.wmv`, `.mpg`, and `.mpeg`.
 
-### Experimental torrent playback check
-
-Jellyfin administrators can check a BitTorrent v1 magnet link under **Import Link → Torrent playback check**. On the Jellyfin host, install Node.js 22 or newer and FFprobe, then run `npm ci` and `npm start` from `scripts/torrent-bridge`. For a manually started bridge, set the same persistent `TORRENT_BRIDGE_SECRET` (at least 32 bytes) in the environments of both Jellyfin and the bridge. The managed bridge generates and retains its own secret. Previously generated unsigned torrent STRM files need to be prepared again. If FFprobe is outside PATH, set `TORRENT_FFPROBE` to its executable path before starting the bridge. The bridge and Jellyfin must share loopback access.
-
-The GitHub release includes a Windows x64 torrent bridge ZIP with Node.js and dependencies, plus a source ZIP for other platforms. On Windows x64, stop Jellyfin, extract the bundle into its program data directory, and restart Jellyfin. The plugin starts the bridge automatically.
-
-For Jellyfin-managed startup on other platforms, place the bridge files and installed Node dependencies in `torrent-bridge` under Jellyfin's program data directory. Put the Node executable in `torrent-bridge/runtime` as `node.exe` on Windows or `node` on Linux. Jellyfin starts and supervises that installation. Use one launcher for the bridge.
-
-The bridge discovers public peers through DHT, selects the largest supported video, times the first 4 MiB (or the entire file if smaller), and estimates the average video bitrate from its duration and size. **Likely smooth** requires the full opening sample and at least 50% throughput headroom. **May buffer** flags insufficient headroom or an unknown bitrate. **Unavailable** covers cases such as missing metadata, an empty opening sample, and torrents over the RAM limit. These checks measure the torrent source at startup. Playback can also depend on the client and Jellyfin transcoding.
-
-**Import Link** also offers **Save Test STRM** for manual testing. Automatic torrent imports use a durable URL that reloads the torrent on demand. The bridge holds one torrent at a time, with a RAM budget of up to 4 GiB based on the host's memory at startup. Jellyfin may write temporary transcoding output if the client requires a transcode.
-
-Run `npm test` from the bridge directory to test the HTTP check and byte-range playback with a local seed. Set `TORRENT_TEST_VIDEO` to an MP4 of at least 2 KiB to include real FFprobe metadata in that test.
-
-### Search with torrent providers
-
-In **Setup Media → Torrent Providers → Browse Providers**, search the built-in catalog or filter it by media type. Use **Test** to check a provider from the Jellyfin server, then **Add**. The built-in entries need no credentials. Knaben covers movies, shows, and anime. The 1337x, The Pirate Bay, and YTS entries use Knaben with an individual source filter. Nyaa covers anime.
-
-Enable **18+ torrent mode** under **Setup Media → Source Availability** to show the **Adult torrents** search filter for administrators. This filter searches configured adult-capable providers such as 0Magnet and custom Torznab providers that support adult categories. Adult results appear only in this filter.
-
-Use **Setup Media → Source Availability** to pause configured media servers (FTP, HTTP, and HTTPS) and torrent sources independently. Both switches save immediately and retain the configured servers and providers. Pausing media servers excludes them from search, import, automation, and signed HTTP playback. Pausing torrents stops provider searches and new playback checks. Existing Jellyfin library items remain searchable, and you can still run connection tests while either source type is paused.
-
-To use an additional Torznab indexer, open **Add Custom Torznab** and enter its name, API endpoint, and API key if required. Enter the key in its own field. Use **Test connection** to verify search access, then **Add provider**.
-
-Signed-in users can search enabled providers through **Search & Add Media**. **Torrent** badges open the release list with provider, resolution, file size, and seeder count when supplied. Matching library or media server cards carry the badge. Other matches appear under **Torrent providers**.
-
-**Experimental torrent playback.** When an administrator selects **Open** on a movie, show, or anime result tagged **Torrent**, the bridge tests up to four compatible releases in parallel and selects one that fills the opening video buffer. The plugin then creates STRM files and opens the indexed title. The bridge discovers peers through DHT and public trackers. Automatic import supports releases with a compatible magnet that fit the bridge's RAM budget.
-
 ## Requirements
 
 - Jellyfin Server **12.0.0** with plugin ABI `12.0.0.0`.
@@ -94,42 +75,142 @@ Signed-in users can search enabled providers through **Search & Add Media**. **T
 
 5. Save, then open **Dashboard > Plugins > Catalog**.
 6. Select **Media Source Bridge** and choose **Install**.
-7. Restart Jellyfin.
+7. Restart the Jellyfin server, reopen the web client, and select **Media Source Bridge** in the sidebar. **Setup Media** is available to administrators.
 
 If you previously installed Local ISP FTP Loader, update the existing repository entry to the manifest URL above. The plugin keeps the same ID.
 
-If the plugin is missing from the catalog, open the manifest URL from the Jellyfin server and confirm the server is running Jellyfin `12.0.0`.
+If the plugin is missing from the catalog, verify that the Jellyfin server can reach the manifest and supports plugin ABI `12.0.0.0`.
+
+<details>
+<summary>Manual installation from the GitHub release</summary>
+
+1. Download `Media-Source-Bridge-<version>.zip` from the [GitHub release](https://github.com/shahadat-hossion/media-source-bridge/releases/latest). The release also provides an MD5 checksum for the plugin ZIP.
+2. Stop Jellyfin. Locate its `plugins` directory and create a folder for this version of the plugin, such as `MediaSourceBridge_2.7.10.0` for v2.7.10.
+3. Extract the ZIP into that folder so `Jellyfin.Plugin.LinkAdder.dll` and `meta.json` are directly inside it. Preserve the settings in `plugins/configurations` if you are updating.
+4. Give the Jellyfin service account permission to read the extracted files, start Jellyfin, and confirm that **Media Source Bridge** appears under **Dashboard → Plugins**.
+
+The plugin path depends on how Jellyfin is installed. [Jellyfin plugin installation documentation](https://jellyfin.org/docs/general/server/plugins/)
+
+</details>
+
+## Create a library and set its save location
+
+1. Open **Dashboard → Libraries**. Create a Movies or Shows library if you do not already have one. For anime, use a Shows library with **Anime** in the name.
+2. Add a folder the Jellyfin process can write to, such as `D:\Media\Movies` on Windows. If Jellyfin runs in a container, mount the host folder read-write and enter the path from inside the container, such as `/media/movies`.
+3. Open **Media Source Bridge → Setup Media → Default Save Locations**. Choose a library for each media type you plan to use and select **Save default locations**.
+
+Search, Import Link, Discover, and administrator downloads use these shared defaults. Jellyfin indexes the added files through its normal library scan.
 
 ## Configure a private media source
 
 An administrator performs this once for each server:
 
 1. Open **Setup Media** from the Media Source Bridge landing page.
-2. Enter a display name, media type, and complete `ftp://`, `http://`, or `https://` directory URL.
-3. Add FTP credentials if the server requires them.
+2. Under **Add Server**, enter a display name, media type, and full directory URL ending in `/`. Examples include `ftp://192.168.1.20/Anime/`, `http://192.168.1.20:8080/Movies/`, or `https://192.168.1.20/Shows/`.
+3. If the source requires credentials, use the separate username and password fields. For HTTPS, use a certificate that the Jellyfin server trusts and that is valid for the IP address.
 4. Select **Test connection**.
 5. Select **Add server** after the test succeeds.
 
 Choose **Movies & TV Series (Both)** when one server contains both categories. Source configuration, connection tests, saved credentials, and source removal are visible only to Jellyfin administrators.
 
-The plugin does not include provider-specific addresses. Each administrator supplies the private server URLs available on their own network.
+For HTTP or HTTPS search, the endpoint must list links to media files or folders. Use the final directory URL because the plugin rejects HTTP redirects. In Docker, `127.0.0.1` refers to the Jellyfin container itself. Use a reachable private IP if the media server runs elsewhere.
+
+Use **Configured Servers → Test all servers** when troubleshooting several sources. **Export servers** and **Import servers** let you transfer the list as JSON. Exports omit credentials by default.
 
 ## Search and add media
 
 1. Select the **Search & Add Media** icon in the Jellyfin web header or open **Search** from the Media Source Bridge landing page.
 2. Enter at least two characters from a movie, show, episode, or anime title.
 3. Review the single **Search Results** grid. Matching library items appear first, followed by titles available from configured media servers.
-4. Duplicate titles are collapsed into one card. Library items show **Play** (or **Open** for a series); titles not yet in Jellyfin show **Add & Play**.
-5. Select **Add & Play** to create the `.strm` in the configured default save location, refresh that library, and open the indexed title. No destination popup is shown.
-
-### Default save locations
-
-An administrator can open **Setup Media** and assign one default Jellyfin library for Movies, Shows, and Anime. These shared defaults are used by Discover, home Search, Search Media, Import Link, Add Media, STRM creation, and downloads. Changing a default there changes the destination for every workflow.
-6. The plugin creates the lightweight `.strm` files, starts a Jellyfin scan, waits for the indexed item, and then plays the movie or opens the show. If indexing exceeds 90 seconds, it reports that the title was added and lets Jellyfin finish in the background.
+4. Choose **Play** or **Open** for an item already in your library. For a private-source result, select the **FTP** add action. The same action supports configured HTTP and HTTPS sources.
+5. The plugin creates the STRM in the default save location and queues a library scan. Once indexed, it plays the movie or opens the show. If indexing takes more than 90 seconds, select **Check again** once Jellyfin has had time to finish.
 
 Administrators can expand **Search button settings** on the unified search page to keep Jellyfin's standard search button or replace it with the plugin search. The plugin search icon is always labelled **Search & Add Media** for accessibility.
 
 Jellyfin handles metadata, artwork, transcoding, and playback normally. The remote server must remain reachable whenever a stream is played.
+
+## Import a file or folder
+
+1. Open **Media Source Bridge → Import Link** and select the media type.
+2. Paste a supported video file or folder URL that is inside one of your saved sources, then select **Analyze Link**.
+3. Review the file list, detected seasons, and destination. Adjust the title if needed and select **Create STRM Files**.
+4. When Jellyfin finishes its scan, open the item from your library.
+
+### Download actual media files
+
+As an administrator, analyze the link using the same steps and select **Download Files**. Leave the page open to watch progress or use **Cancel Download**. You can also leave after starting the job and let it continue on the server. Completed files remain in the destination folder if you cancel the remaining transfer. After a completed download, you can play the saved video even if the original source is offline.
+
+## Install the torrent bridge
+
+Install the Jellyfin plugin first, then choose the bridge asset from the same [GitHub release](https://github.com/shahadat-hossion/media-source-bridge/releases/latest). Updating the plugin through Jellyfin's catalog leaves the bridge installation to you.
+
+In the Jellyfin startup log, find the line labelled **Program data path**. That's where the `torrent-bridge` folder belongs, alongside `plugins`. Common paths include the following. Use the path from your own startup log if it differs. [Jellyfin server paths](https://jellyfin.org/docs/general/administration/configuration/)
+
+| Installation | Common program data path |
+| --- | --- |
+| Windows service or tray | `C:\ProgramData\Jellyfin\Server` |
+| Windows direct launch | `%LOCALAPPDATA%\jellyfin` |
+| Debian or Ubuntu package | `/var/lib/jellyfin` |
+| Official Jellyfin container | `/config` inside the container |
+
+### Windows x64 bundle
+
+1. Download `Torrent-Bridge-<version>-windows-x64.zip`. It includes Node.js and the installed bridge dependencies.
+2. Stop the Jellyfin server and any manually started bridge. Extract the ZIP into Jellyfin's program data directory. The extracted files should be laid out like this.
+
+   ```text
+   <Jellyfin program data>/
+   ├── plugins/
+   └── torrent-bridge/
+       ├── bridge.mjs
+       ├── node_modules/
+       └── runtime/
+           └── node.exe
+   ```
+
+3. Start Jellyfin. The plugin starts the bridge and supplies a persistent signing secret. Look for **Torrent playback check listening** in the Jellyfin log.
+4. The managed bridge uses FFprobe from the Jellyfin executable directory when available. Otherwise, put FFprobe on the Jellyfin service account's PATH or set `TORRENT_FFPROBE` to its full path in the service environment.
+
+### Linux, Docker, and other platforms
+
+1. Download `Torrent-Bridge-<version>-source.zip` and extract it into the program data directory. For Docker, use the host volume that maps to the program data path inside the container.
+2. Install Node.js 22 or later, npm, and FFprobe for the operating system and CPU that run Jellyfin. Run `npm ci` in the extracted `torrent-bridge` directory. For a container, build the native dependencies in an environment compatible with that container.
+3. For Jellyfin-managed startup, place the compatible Node executable at `torrent-bridge/runtime/node` on Linux or `torrent-bridge/runtime/node.exe` on Windows. Give the Jellyfin service account access to read the bridge files and execute Node, then restart Jellyfin. For example, on a standard Debian or Ubuntu installation with Node.js already installed:
+
+   ```sh
+   cd /var/lib/jellyfin/torrent-bridge
+   npm ci
+   mkdir -p runtime
+   install -m 755 "$(command -v node)" runtime/node
+   ```
+
+For manual startup, leave the managed runtime path unused. Set the same persistent `TORRENT_BRIDGE_SECRET` of at least 32 bytes in the environments of Jellyfin and the bridge, then run `npm start` in the bridge directory. Keep both processes on the same loopback network. The default bridge API and internal stream ports are `127.0.0.1:18781` and `127.0.0.1:18782`. Run one bridge per port pair.
+
+When upgrading, update the plugin and bridge together. Retain the plugin configuration and any manually configured secret. Re-prepare torrent STRM files created before signed playback was introduced.
+
+### Check a torrent magnet
+
+As an administrator, open **Media Source Bridge → Import Link → Torrent playback check**. Paste a BitTorrent v1 magnet, then select **Check Playback**. Select **Save Test STRM** if you want to save the signed pointer that the check returns.
+
+The bridge discovers public peers through DHT, selects the largest supported video, times the first 4 MiB (or the entire file if smaller), and estimates the average video bitrate from its duration and size. **Likely smooth** requires the full opening sample and at least 50% throughput headroom. **May buffer** flags insufficient headroom or an unknown bitrate. **Unavailable** covers cases such as missing metadata, an empty opening sample, and torrents over the RAM limit. These checks measure the torrent source at startup. Playback can also depend on the client and Jellyfin transcoding.
+
+Torrent imports use signed URLs that can reload the torrent on demand. The bridge holds one torrent at a time, with a RAM budget of up to 4 GiB based on the host's memory at startup. Jellyfin may write temporary output if the client requires transcoding.
+
+Run `npm test` from the bridge directory to test the HTTP check and byte-range playback with a local seed. Set `TORRENT_TEST_VIDEO` to an MP4 of at least 2 KiB to include real FFprobe metadata in that test.
+
+## Search with torrent providers
+
+In **Setup Media → Torrent Providers → Browse Providers**, search the built-in catalog or filter it by media type. Use **Test** to check a provider from the Jellyfin server, then **Add**. The built-in entries need no credentials. Knaben covers movies, shows, and anime. The 1337x, The Pirate Bay, and YTS entries use Knaben with an individual source filter. Nyaa covers anime.
+
+Enable **18+ torrent mode** under **Setup Media → Source Availability** to show the **Adult torrents** search filter for administrators. This filter searches configured adult-capable providers such as 0Magnet and custom Torznab providers that support adult categories. Adult results appear only in this filter.
+
+Use **Setup Media → Source Availability** to pause configured media servers (FTP, HTTP, and HTTPS) and torrent sources independently. Both switches save immediately and retain the configured servers and providers. Pausing media servers excludes them from search, import, automation, and signed HTTP playback. Pausing torrents stops provider searches and new playback checks. Existing Jellyfin library items remain searchable, and you can still run connection tests while either source type is paused.
+
+To use an additional Torznab indexer, open **Add Custom Torznab** and enter its name, API endpoint, and API key if required. Enter the key in its own field. Use **Test connection** to verify search access, then **Add provider**.
+
+Signed-in users can search enabled providers through **Search & Add Media**. **Torrent** badges open the release list with provider, resolution, file size, and seeder count when supplied. Matching library or media server cards carry the badge. Other matches appear under **Torrent providers**.
+
+**Experimental torrent playback.** When an administrator selects **Open** on a movie, show, or anime result tagged **Torrent**, the bridge tests up to four compatible releases in parallel and selects one that fills the opening video buffer. The plugin then creates STRM files and opens the indexed title. The bridge discovers peers through DHT and public trackers. Automatic import supports releases with a compatible magnet that fit the bridge's RAM budget.
 
 ## Automatic discovery
 
@@ -142,6 +223,8 @@ Open **Media Source Bridge** in Jellyfin's sidebar to reach the landing page and
 - **Preview only** mode to inspect exact matches without creating files.
 
 The discovery providers supply titles and metadata only. The plugin searches the configured private sources and creates `.strm` files only when one exact title/year match is found. Missing and ambiguous matches are skipped. Scheduled runs check every 15 minutes and execute when the configured interval is due.
+
+To try Discover without scheduling imports, open a card and select **Add to Library**. If it returns multiple candidates, choose the correct match. To set up automation, choose your categories and filters, leave **Preview only** enabled, select **Save**, then **Preview matches**. When the results look right, clear **Preview only**, save, and select **Run now** or enable scheduled runs. Review the results and history on the same page.
 
 Automatically added titles and their generated files are tracked. If an administrator deletes all tracked `.strm` files for a title, the next run places its provider ID in **Excluded titles** instead of restoring it. An administrator can select **Allow again** to remove that exclusion.
 
@@ -160,7 +243,7 @@ Existing Jellyfin library
 Jellyfin metadata and playback
 ```
 
-Movies are placed in a title folder. Series keep useful remote subfolders such as seasons when available. File and directory names are sanitized before local files are created, and an existing destination file is never overwritten.
+Movies are placed in a title folder. Series are grouped into season folders when the source provides usable season or episode labels. Re-importing can upgrade a matching legacy STRM pointer. Existing media files and pointers to other sources are preserved.
 
 ## Troubleshooting
 
@@ -178,7 +261,7 @@ Movies are placed in a title folder. Series keep useful remote subfolders such a
 
 - Create the Movies or Shows library in Jellyfin first.
 - Confirm that it has a local folder path writable by the Jellyfin process.
-- Refresh **Add Media** after changing Jellyfin libraries.
+- Open **Setup Media → Default Save Locations** and save the new default, then reopen the Search or Import Link page.
 </details>
 
 <details>
@@ -186,20 +269,31 @@ Movies are placed in a title folder. Series keep useful remote subfolders such a
 
 - Run **Dashboard > Scheduled Tasks > Scan Media Library**.
 - Verify that Jellyfin can write to the selected library folder.
-- Open the generated `.strm` file and confirm its URL is reachable from the Jellyfin server.
+- Confirm that the signed HTTP playback URL or the direct FTP URL is reachable from the Jellyfin server.
+- Verify that the signed-in user has access to the destination library.
 - Check the Jellyfin log for library scan or remote playback errors.
 </details>
 
 <details>
 <summary><strong>A stream does not play</strong></summary>
 
-The `.strm` file points directly to the configured private server. Confirm that the remote file still exists, the private server is online, and the Jellyfin server can reach it. The plugin cannot restore an unavailable remote file.
+Confirm that the source still exists, is enabled in **Source Availability**, and is reachable from Jellyfin. Current HTTP and HTTPS pointers use a signed loopback relay, while FTP pointers use their original FTP URL. Re-import an older direct HTTP or HTTPS STRM to upgrade it. For torrent pointers, verify the bridge is running. Re-prepare torrents that were added before signed playback.
+
+</details>
+
+<details>
+<summary><strong>The torrent bridge will not start or reports an unknown bitrate</strong></summary>
+
+- Confirm the plugin and bridge came from the same release. Check that you extracted `torrent-bridge` directly under the program data directory from the Jellyfin startup log.
+- Check the Jellyfin log for bridge startup errors. An address-in-use error on port `18781` or `18782` means a listener already owns that port. Check for another copy of the bridge.
+- For a manually started bridge, verify that both processes use the same secret and share the same loopback network. In Docker, an ordinary separate container has its own loopback interface.
+- If bitrate is unknown, check whether FFprobe is available to the bridge. If a torrent buffers after a successful check, peer availability or transcoding can still be a factor.
 </details>
 
 <details>
 <summary><strong>An older interface is still visible after updating</strong></summary>
 
-Restart Jellyfin, close and reopen **Add Media**, then hard-refresh the web client with **Ctrl + F5**. Version `2.4.1` or newer is required for the combined Movies and TV source type.
+Restart Jellyfin, hard-refresh the web client, then reopen the plugin page. If the sidebar entry is still missing, confirm the plugin is listed under **Dashboard → Plugins**.
 </details>
 
 ## Security and privacy
@@ -212,21 +306,22 @@ Restart Jellyfin, close and reopen **Add Media**, then hard-refresh the web clie
 - Re-importing upgrades a matching legacy STRM pointer. Existing media and pointers to different sources are preserved.
 - Users can list and delete their own media requests. Requests created before ownership was recorded are visible to administrators.
 - Actual media downloads require Jellyfin administrator elevation and can only target a current compatible library path.
-- FTP credentials remain in Jellyfin's plugin configuration.
+- Saved source credentials remain in Jellyfin's plugin configuration.
 
 ## Build from source
 
 Install the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0), clone this repository, and run:
 
 ```powershell
+dotnet test tests/LinkAdder.Tests --configuration Release
 .\build.ps1
 ```
 
-The build creates a release ZIP and MD5 checksum in `dist`. The ZIP contains the plugin DLL, dependency manifest, and `meta.json`.
+The build creates a plugin release ZIP and MD5 checksum in `dist`. To test the torrent bridge, run `npm ci` and `npm test` in `scripts/torrent-bridge`. On Windows x64, run `.\scripts\Build-TorrentBridge.ps1` from the repository root after installing the bridge dependencies to build both bridge ZIPs.
 
 ## Limitations
 
-- No IMDb, TMDb, Google, torrent, or public-internet media search.
+- The private-source importer searches configured media roots. Discovery uses TMDb and AniList for metadata, and torrent search uses the providers you enable.
 - Downloads run on the Jellyfin server with one active transfer and up to four queued downloads. Administrators can cancel from the download progress panel. A transfer is limited to 50 GiB, six hours overall, and 30 seconds of inactivity. Completed files are kept on cancellation. Temporary download files are excluded from imports and cleaned up on cancellation or a later retry.
 - No automatic Jellyfin library creation or reconfiguration.
 - No anonymous access or public FTP/HTTP roots.
