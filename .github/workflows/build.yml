@@ -18,6 +18,18 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
+      - name: Run plugin regression tests
+        run: dotnet test tests/LinkAdder.Tests --configuration Release
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: scripts/torrent-bridge/package-lock.json
+      - name: Run torrent bridge integration tests
+        working-directory: scripts/torrent-bridge
+        run: |
+          npm ci
+          npm test
       - name: Build release package
         shell: pwsh
         run: .\build.ps1

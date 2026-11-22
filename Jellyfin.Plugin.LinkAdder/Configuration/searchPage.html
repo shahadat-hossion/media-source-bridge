@@ -29,10 +29,6 @@ async function call(path, method='GET', body) {
 let searchToken = 0;
 let searchActions;
 const image=item=>item.ImageTags?.Primary?ApiClient.getScaledImageUrl(item.Id,{type:'Primary',maxWidth:360,tag:item.ImageTags.Primary}):'';
-function pathKey(path) {
-    const normalized = String(path ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
-    return /^[a-z]:|^\/\//i.test(normalized) ? normalized.toLowerCase() : normalized;
-}
 
 
 const poster=(url,title)=>url?'<img class="lidPoster" src="'+esc(url)+'" alt="'+esc(title)+' poster" loading="lazy" onerror="this.outerHTML=\'<span class=&quot;lidPoster lidPosterFallback&quot; aria-hidden=&quot;true&quot;>▣</span>\'">':'<span class="lidPoster lidPosterFallback" aria-hidden="true">▣</span>';
@@ -59,17 +55,11 @@ function renderLocal(items){
     });
 }
 async function searchLocal(query, token, filter) {
-    const [result, libraries] = await Promise.all([
-        ApiClient.getItems(ApiClient.getCurrentUserId(), {SearchTerm:query, IncludeItemTypes:filter === 'movie' ? 'Movie' : filter === 'series' ? 'Series,Episode' : 'Movie,Series,Episode', Recursive:true, Limit:filter ? 100 : 30, Fields:'Path', ImageTypeLimit:1, EnableImageTypes:'Primary'}),
-        call('Libraries').catch(() => [])
+    const [actions, libraries] = await Promise.all([
+        import(ApiClient.getUrl('LocalIspFtpLoader/search-actions.js')), call('Libraries').catch(() => [])
     ]);
+    const items = await actions.searchLibrary(query, filter, libraries);
     if (token !== searchToken) return;
-    const anime = libraries.filter(library => value(library, 'MediaType') === 'anime').map(library => pathKey(value(library, 'Path')));
-    const items = (result.Items || []).map(item => {
-        const path = pathKey(item.Path);
-        const type = anime.some(root => root && path.startsWith(root + '/')) ? 'anime' : item.Type === 'Movie' ? 'movie' : 'series';
-        return {...item, category:type};
-    }).filter(item => !filter || item.category === filter);
     renderLocal(items.slice(0, 30));
     return items;
 }

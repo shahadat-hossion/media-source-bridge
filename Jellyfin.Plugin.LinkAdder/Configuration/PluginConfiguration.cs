@@ -9,6 +9,7 @@ public sealed class PluginConfiguration : BasePluginConfiguration
     public SearchDestinationOptions SearchDestinations { get; set; } = new();
     public List<CustomSource> CustomSources { get; set; } = [];
     public List<TorrentProvider> TorrentProviders { get; set; } = [];
+    public string PlaybackSigningKey { get; set; } = string.Empty;
     public List<MediaAddRequest> MediaRequests { get; set; } = [];
     public AutomationOptions Automation { get; set; } = new();
     public List<AutomationHistoryItem> AutomationHistory { get; set; } = [];
@@ -53,6 +54,7 @@ public sealed class CustomSource
 public sealed class MediaAddRequest
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public Guid RequestedById { get; set; }
     public string RequestedBy { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
     public string Url { get; set; } = string.Empty;

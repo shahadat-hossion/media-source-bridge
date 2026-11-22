@@ -9,20 +9,20 @@ namespace Jellyfin.Plugin.LinkAdder.Services;
 public sealed partial class AutomationService
 {
     private static readonly SemaphoreSlim RunLock = new(1, 1);
-    private readonly IHttpClientFactory _clients;
+    private readonly SourcePlayback _playback;
     private readonly ILibraryManager _library;
     private readonly DiscoveryService _discovery;
 
-    public AutomationService(IHttpClientFactory clients, ILibraryManager library, DiscoveryService discovery)
+    public AutomationService(ILibraryManager library, DiscoveryService discovery, SourcePlayback playback)
     {
-        _clients = clients;
+        _playback = playback;
         _library = library;
         _discovery = discovery;
     }
 
     public async Task WarmSearchIndexesAsync(CancellationToken ct)
     {
-        var service = new LinkAdderService(_clients.CreateClient(), Plugin.GetSourceSnapshot());
+        var service = new LinkAdderService(Plugin.GetSourceSnapshot());
         await service.WarmSearchIndexesAsync(ct).ConfigureAwait(false);
     }
 
@@ -33,7 +33,13 @@ public sealed partial class AutomationService
         try
         {
             var configuration = Plugin.Instance?.Configuration ?? throw new InvalidOperationException("Plugin configuration is unavailable.");
-            var service = new LinkAdderService(_clients.CreateClient(), Plugin.GetSourceSnapshot());
+            lock (Plugin.ConfigurationSync)
+            {
+                ReconcileDeletedItems(configuration);
+                if (configuration.AutomationExcludedIds.Contains(title.ContentId, StringComparer.OrdinalIgnoreCase))
+                    return new(ToCandidate(title, "excluded", "An administrator must allow this title again."), []);
+            }
+            var service = new LinkAdderService(Plugin.GetSourceSnapshot());
             var matches = await FindExactMatchesAsync(service, title, ct).ConfigureAwait(false);
             if (matches.Count == 0)
                 return new(ToCandidate(title, "unmatched", "No title match was found on configured private servers."), []);
@@ -56,7 +62,7 @@ public sealed partial class AutomationService
                 return new(ToCandidate(title, "failed", "No compatible destination library is configured."), []);
 
             var preview = await service.PreviewAsync(match.Url, title.MediaType, title.Title, ct).ConfigureAwait(false);
-            var write = service.Write(preview, path);
+            var write = service.Write(preview, path, _playback.CreateUrl);
             if (write.Created.Count == 0)
                 return new(ToCandidate(title, "skipped", "Matching STRM files already exist.", match.Url, match.Source), []);
 
@@ -64,12 +70,11 @@ public sealed partial class AutomationService
             {
                 configuration.AutomationAddedItems.RemoveAll(x => x.ContentId.Equals(title.ContentId, StringComparison.OrdinalIgnoreCase));
                 configuration.AutomationAddedItems.Add(new AutomationAddedItem { ContentId = title.ContentId, Title = title.Title, MediaType = title.MediaType, Files = write.Created.ToList() });
-                configuration.AutomationExcludedIds.RemoveAll(x => x.Equals(title.ContentId, StringComparison.OrdinalIgnoreCase));
                 AddHistory(configuration, title, "added", $"Created {write.Created.Count} STRM file(s) from {match.Source}.");
                 TrimHistory(configuration);
                 Plugin.Instance!.UpdateConfiguration(configuration);
             }
-            _ = Task.Run(() => _library.ValidateMediaLibrary(new Progress<double>(), CancellationToken.None));
+            _library.QueueLibraryScan();
             return new(ToCandidate(title, "added", $"Created {write.Created.Count} STRM file(s). Jellyfin library scan started.", match.Url, match.Source), []);
         }
         finally
@@ -97,7 +102,7 @@ public sealed partial class AutomationService
 
             var previewOnly = forcePreview || options.PreviewOnly;
             var discovered = await _discovery.DiscoverAsync(options, ct).ConfigureAwait(false);
-            var service = new LinkAdderService(_clients.CreateClient(), Plugin.GetSourceSnapshot());
+            var service = new LinkAdderService(Plugin.GetSourceSnapshot());
             var results = new List<AutomationCandidate>();
             var addedAny = false;
 
@@ -144,7 +149,7 @@ public sealed partial class AutomationService
                     }
                     var displayTitle = title.Year is null ? title.Title : $"{title.Title} ({title.Year})";
                     var preview = await service.PreviewAsync(match.Url, title.MediaType, displayTitle, ct).ConfigureAwait(false);
-                    var write = service.Write(preview, path);
+                    var write = service.Write(preview, path, _playback.CreateUrl);
                     if (write.Created.Count == 0)
                     {
                         results.Add(ToCandidate(title, "skipped", "Matching STRM files already exist.", match.Url, match.Source));
@@ -174,7 +179,7 @@ public sealed partial class AutomationService
                 TrimHistory(configuration);
                 Plugin.Instance!.UpdateConfiguration(configuration);
             }
-            if (addedAny) _ = Task.Run(() => _library.ValidateMediaLibrary(new Progress<double>(), CancellationToken.None));
+            if (addedAny) _library.QueueLibraryScan();
             return new(discovered.Count, results.Count(x => x.Status is "matched" or "added"), results.Count(x => x.Status == "added"), results.Count(x => x.Status is "skipped" or "excluded" or "unmatched" or "ambiguous"), results.Count(x => x.Status == "failed"), previewOnly, results);
         }
         finally

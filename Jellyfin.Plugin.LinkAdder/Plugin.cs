@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Jellyfin.Plugin.LinkAdder.Configuration;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
@@ -8,6 +9,24 @@ namespace Jellyfin.Plugin.LinkAdder;
 public sealed class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
 {
     internal static object ConfigurationSync { get; } = new();
+
+    internal static string GetPlaybackSigningKey()
+    {
+        lock (ConfigurationSync)
+        {
+            var plugin = Instance ?? throw new InvalidOperationException("Plugin configuration is unavailable.");
+            var configuration = plugin.Configuration;
+            if (string.IsNullOrEmpty(configuration.PlaybackSigningKey))
+            {
+                configuration.PlaybackSigningKey = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+                plugin.UpdateConfiguration(configuration);
+            }
+            return configuration.PlaybackSigningKey;
+        }
+    }
+
+    internal static string GetBridgeSecret() => Environment.GetEnvironmentVariable("TORRENT_BRIDGE_SECRET")
+        ?? Convert.ToHexString(HMACSHA256.HashData(Convert.FromHexString(GetPlaybackSigningKey()), "torrent-bridge"u8));
 
     internal static CustomSource[] GetSourceSnapshot(bool includeDisabled = false)
     {

@@ -16,8 +16,12 @@ public sealed class PluginServiceRegistrator : IPluginServiceRegistrator
     {
         serviceCollection.AddSingleton<IStartupFilter, HeaderButtonStartupFilter>();
         serviceCollection.AddSingleton<DiscoveryService>();
+        serviceCollection.AddSingleton<SourcePlayback>();
+        serviceCollection.AddHttpClient("LinkAdderTorrentBridge").ConfigurePrimaryHttpMessageHandler(() =>
+            new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false, UseCookies = false });
         serviceCollection.AddSingleton<AutomationService>();
         serviceCollection.AddSingleton<DownloadService>();
+        serviceCollection.AddHostedService(services => services.GetRequiredService<DownloadService>());
         serviceCollection.AddHostedService<AutomationBackgroundService>();
         serviceCollection.AddHostedService<TorrentBridgeBackgroundService>();
     }

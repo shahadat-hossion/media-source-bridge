@@ -15,7 +15,7 @@
 
 Media Source Bridge is a Jellyfin 12 plugin for media indexes hosted by a local ISP, home server, NAS, or another private-network server. Signed-in Jellyfin users can search those configured sources from a PC, TV, or phone and add a title to an existing Jellyfin library without manually browsing directories or copying links.
 
-By default, the plugin creates small `.strm` pointer files and playback continues to use the original private server. Administrators can instead explicitly download the actual video files into the selected Jellyfin library.
+By default, the plugin creates small `.strm` pointer files. Jellyfin relays HTTP and HTTPS media from the configured private source through a signed loopback URL. FTP pointers still use the original FTP URL. Administrators can instead explicitly download the actual video files into the selected Jellyfin library.
 
 > [!IMPORTANT]
 > FTP and HTTP media-library sources must use loopback or a private IPv4 address (`10.x.x.x`, `172.16-31.x.x`, or `192.168.x.x`). The Jellyfin server must be able to route to each source.
@@ -46,7 +46,7 @@ Supported video extensions include `.mkv`, `.mp4`, `.avi`, `.mov`, `.m4v`, `.ts`
 
 ### Experimental torrent playback check
 
-Jellyfin administrators can check a BitTorrent v1 magnet link under **Import Link → Torrent playback check**. On the Jellyfin host, install Node.js 22 or newer and FFprobe, then run `npm ci` and `npm start` from `scripts/torrent-bridge`. If FFprobe is outside PATH, set `TORRENT_FFPROBE` to its executable path before starting the bridge. The bridge and Jellyfin must share loopback access.
+Jellyfin administrators can check a BitTorrent v1 magnet link under **Import Link → Torrent playback check**. On the Jellyfin host, install Node.js 22 or newer and FFprobe, then run `npm ci` and `npm start` from `scripts/torrent-bridge`. For a manually started bridge, set the same persistent `TORRENT_BRIDGE_SECRET` (at least 32 bytes) in the environments of both Jellyfin and the bridge. The managed bridge generates and retains its own secret. Previously generated unsigned torrent STRM files need to be prepared again. If FFprobe is outside PATH, set `TORRENT_FFPROBE` to its executable path before starting the bridge. The bridge and Jellyfin must share loopback access.
 
 For Jellyfin-managed startup, place the bridge files and installed Node dependencies in `torrent-bridge` under Jellyfin's program data directory. Put the Node executable in `torrent-bridge/runtime` as `node.exe` on Windows or `node` on Linux. Jellyfin starts and supervises that installation. Use one launcher for the bridge.
 
@@ -62,7 +62,7 @@ In **Setup Media → Torrent Providers → Browse Providers**, search the built-
 
 Enable **18+ torrent mode** under **Setup Media → Source Availability** to show the **Adult torrents** search filter for administrators. This filter searches configured adult-capable providers such as 0Magnet and custom Torznab providers that support adult categories. Adult results appear only in this filter.
 
-Use **Setup Media → Source Availability** to pause configured media servers (FTP, HTTP, and HTTPS) and torrent sources independently. Both switches save immediately and retain the configured servers and providers. Pausing media servers excludes them from search, import, and automation. Pausing torrents stops provider searches and new playback checks. Existing Jellyfin library items remain searchable, and you can still run connection tests while either source type is paused.
+Use **Setup Media → Source Availability** to pause configured media servers (FTP, HTTP, and HTTPS) and torrent sources independently. Both switches save immediately and retain the configured servers and providers. Pausing media servers excludes them from search, import, automation, and signed HTTP playback. Pausing torrents stops provider searches and new playback checks. Existing Jellyfin library items remain searchable, and you can still run connection tests while either source type is paused.
 
 To use an additional Torznab indexer, open **Add Custom Torznab** and enter its name, API endpoint, and API key if required. Enter the key in its own field. Use **Test connection** to verify search access, then **Add provider**.
 
@@ -202,12 +202,13 @@ Restart Jellyfin, close and reopen **Add Media**, then hard-refresh the web clie
 
 ## Security and privacy
 
-- All plugin endpoints require an authenticated Jellyfin user.
+- Plugin actions require Jellyfin authentication. The playback relay accepts signed URLs over loopback, and static client assets are public.
 - Source-management operations require Jellyfin administrator elevation.
 - Only loopback and private IPv4 source URLs are accepted.
-- A source URL must remain inside a configured private root.
+- A source URL must remain inside a configured private root. The plugin rejects HTTP redirects for listings, downloads, and relayed playback. Re-import an existing HTTP STRM to upgrade its matching direct pointer.
 - Configure Movies, Shows, and Anime under **Setup Media → Default Save Locations**. Each destination must match a current compatible Jellyfin library.
-- Existing local files are not overwritten.
+- Re-importing upgrades a matching legacy STRM pointer. Existing media and pointers to different sources are preserved.
+- Users can list and delete their own media requests. Requests created before ownership was recorded are visible to administrators.
 - Actual media downloads require Jellyfin administrator elevation and can only target a current compatible library path.
 - FTP credentials remain in Jellyfin's plugin configuration.
 
@@ -224,7 +225,7 @@ The build creates a release ZIP and MD5 checksum in `dist`. The ZIP contains the
 ## Limitations
 
 - No IMDb, TMDb, Google, torrent, or public-internet media search.
-- Downloads run as background jobs on the Jellyfin server, so the administrator may leave or close the Add Media page after starting one. Restarting Jellyfin interrupts active transfers; partial files are discarded rather than imported.
+- Downloads run on the Jellyfin server with one active transfer and up to four queued downloads. Administrators can cancel from the download progress panel. A transfer is limited to 50 GiB, six hours overall, and 30 seconds of inactivity. Completed files are kept on cancellation. Temporary download files are excluded from imports and cleaned up on cancellation or a later retry.
 - No automatic Jellyfin library creation or reconfiguration.
 - No anonymous access or public FTP/HTTP roots.
 - No ability to bypass ISP routing or make a private server reachable from another network.

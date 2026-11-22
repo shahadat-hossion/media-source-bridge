@@ -6,6 +6,31 @@ function pathKey(path) {
     return /^[a-z]:|^\/\//i.test(normalized) ? normalized.toLowerCase() : normalized;
 }
 
+export async function searchLibrary(query, filter, libraries) {
+    const userId = ApiClient.getCurrentUserId();
+    const animeLibraries = [...new Set(libraries.filter(library => value(library, 'MediaType') === 'anime')
+        .map(library => value(library, 'Id')).filter(Boolean))];
+    const options = {
+        SearchTerm: query, Recursive: true, Limit: filter ? 100 : 30,
+        ImageTypeLimit: 1, EnableImageTypes: 'Primary'
+    };
+    const normal = filter === 'anime' ? Promise.resolve({ Items: [] }) : ApiClient.getItems(userId, {
+        ...options, IncludeItemTypes: filter === 'movie' ? 'Movie' : filter === 'series' ? 'Series,Episode' : 'Movie,Series,Episode'
+    });
+    const [result, ...animeResults] = await Promise.all([
+        normal,
+        ...animeLibraries.map(ParentId => ApiClient.getItems(userId, {
+            ...options, ParentId, IncludeItemTypes: 'Movie,Series,Episode'
+        }).catch(() => ({ Items: [] })))
+    ]);
+    const anime = new Map(animeResults.flatMap(group => group.Items || []).map(item => [item.Id, item]));
+    const local = new Map((result.Items || []).map(item => [item.Id, item]));
+    if (!filter || filter === 'anime') for (const [id, item] of anime) local.set(id, item);
+    return [...local.values()].map(item => ({
+        ...item, category: anime.has(item.Id) ? 'anime' : item.Type === 'Movie' ? 'movie' : 'series'
+    })).filter(item => !filter || item.category === filter);
+}
+
 function titleKey(name) {
     const title = String(name ?? '').normalize('NFKC')
         .replace(/[._]+/g, ' ')
@@ -76,21 +101,32 @@ export async function waitForIndexedItem(mediaType, added) {
     const folder = pathKey(value(added, 'TitlePath'));
     const files = new Set([...(value(added, 'Created') || []), ...(value(added, 'Skipped') || [])].map(pathKey));
     const title = value(added, 'Title');
+    const libraryId = value(added, 'LibraryId');
     const query = title?.replace(/\s*\((?:19|20)\d{2}\).*$/, '') || title;
-    const matches = entry => mediaType === 'movie' ? files.has(pathKey(entry.Path)) : folder && folder === pathKey(entry.Path);
+    const pathMatches = (actual, expected) => {
+        if (!actual || !expected) return false;
+        if (!libraryId) return actual === expected;
+        const key = /^[a-z]:|^\/\//i.test(actual) ? expected.toLowerCase() : expected;
+        return actual.endsWith('/' + key);
+    };
+    const matches = entry => {
+        const path = pathKey(entry.Path);
+        return mediaType === 'movie' ? [...files].some(file => pathMatches(path, file)) : pathMatches(path, folder);
+    };
+    const scope = libraryId ? { ParentId: libraryId } : {};
     const userId = ApiClient.getCurrentUserId();
     const itemType = mediaType === 'movie' ? 'Movie' : 'Series';
     const deadline = Date.now() + 90000;
     let attempts = 0;
     while (Date.now() < deadline) {
         const result = await ApiClient.getItems(userId, {
-            SearchTerm:query, IncludeItemTypes:itemType, Recursive:true, Limit:50, Fields:'Path'
+            SearchTerm:query, IncludeItemTypes:itemType, Recursive:true, ...scope, Limit:50, Fields:'Path'
         });
         const match = (result.Items || []).find(matches);
         if (match) return match;
         if (++attempts % 3 === 0) {
             const recent = await ApiClient.getItems(userId, {
-                IncludeItemTypes:itemType, Recursive:true, SortBy:'DateCreated', SortOrder:'Descending', Limit:75, Fields:'Path'
+                IncludeItemTypes:itemType, Recursive:true, ...scope, SortBy:'DateCreated', SortOrder:'Descending', Limit:75, Fields:'Path'
             });
             const exactPath = (recent.Items || []).find(matches);
             if (exactPath) return exactPath;

@@ -31,6 +31,7 @@ internal sealed class TorrentBridgeBackgroundService(
                 }
             };
             bridge.StartInfo.ArgumentList.Add(script);
+            bridge.StartInfo.Environment["TORRENT_BRIDGE_SECRET"] = Plugin.GetBridgeSecret();
             bridge.StartInfo.Environment["TORRENT_JELLYFIN_PID"] = Environment.ProcessId.ToString(CultureInfo.InvariantCulture);
             var ffprobe = Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? "ffprobe.exe" : "ffprobe");
             if (File.Exists(ffprobe)) bridge.StartInfo.Environment["TORRENT_FFPROBE"] = ffprobe;

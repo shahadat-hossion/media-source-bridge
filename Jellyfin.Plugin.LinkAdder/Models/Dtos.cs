@@ -3,7 +3,9 @@ public sealed record PreviewRequest(string Url, string MediaType, string? Title)
 public sealed record AddRequest(string Url, string? LibraryPath, string MediaType, string? Title);
 public sealed record RemoteSearchRequest(string MediaType, string Query);
 public sealed record RemoteSearchResult(string Name, string Url, string Source, string PosterUrl);
-public sealed record LibraryOption(string Name, string Path, string MediaType);
+public sealed record LibraryOption(string Name, string Path, string MediaType, string LibraryId);
+public sealed record LibraryView(string Id, string Name, string MediaType);
+public sealed record AddDestinationView(string LibraryId, string Name, string MediaType, bool CanDownload);
 public sealed record SearchUiSettings(bool ReplaceDefaultSearch);
 public sealed record SearchDestinationSettings(string MovieLibraryPath, string SeriesLibraryPath, string AnimeLibraryPath);
 public sealed record PlannedFile(string Url, string RelativePath);
@@ -12,6 +14,7 @@ public sealed record AddResult(IReadOnlyList<string> Created, IReadOnlyList<stri
 {
     public string? Title { get; init; }
     public string? TitlePath { get; init; }
+    public string? LibraryId { get; init; }
 }
 public sealed record DownloadJobStarted(string JobId);
 public sealed record DownloadJobView(string JobId, string Status, double Percentage, string Message, int Downloaded, int Skipped);

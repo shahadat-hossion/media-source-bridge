@@ -91,6 +91,7 @@ public sealed class TorrentProvidersController : ControllerBase
     }
 
     [HttpPost("Search")]
+    [RequestSizeLimit(8192)]
     public async Task<IActionResult> Search([FromBody] SearchInput input, [FromServices] IAuthorizationService authorization,
         [FromServices] IProviderManager metadata, [FromServices] IMemoryCache cache, CancellationToken ct)
     {
@@ -100,6 +101,9 @@ public sealed class TorrentProvidersController : ControllerBase
             return BadRequest(new { error = "Enter a search term between 2 and 200 characters and choose a supported media type." });
         if (filter == "adult" && !(await authorization.AuthorizeAsync(User, Policies.RequiresElevation)).Succeeded)
             return Forbid();
+
+        using var operation = MediaOperationLimits.TryEnter(MediaOperationLimits.UserId(User));
+        if (operation is null) return StatusCode(429, new { error = "Too many media operations. Try again shortly." });
 
         TorrentProvider[] providers;
         lock (Plugin.ConfigurationSync)

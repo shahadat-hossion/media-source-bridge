@@ -330,10 +330,6 @@ public sealed class ClientScriptController : ControllerBase
             const escapeHtml = (text) => String(text ?? '').replace(/[&<>"']/g, (character) => ({
                 '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
             })[character]);
-            const pathKey = (path) => {
-                const normalized = String(path ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
-                return /^[a-z]:|^\/\//i.test(normalized) ? normalized.toLowerCase() : normalized;
-            };
 
             async function pluginCall(path, method = 'GET', body) {
                 try {
@@ -573,21 +569,12 @@ public sealed class ClientScriptController : ControllerBase
             }
 
             async function searchLocalLibrary(query, sequence, filter) {
-                const [result, libraries] = await Promise.all([
-                    ApiClient.getItems(ApiClient.getCurrentUserId(), {
-                        SearchTerm:query, IncludeItemTypes:filter === 'movie' ? 'Movie' : filter === 'series' ? 'Series,Episode' : 'Movie,Series,Episode',
-                        Recursive:true, Limit:filter ? 100 : 30, Fields:'Path', ImageTypeLimit:1, EnableImageTypes:'Primary'
-                    }),
-                    pluginCall('Libraries').catch(() => [])
+                const [actions, libraries] = await Promise.all([
+                    import(ApiClient.getUrl('LocalIspFtpLoader/search-actions.js')), pluginCall('Libraries').catch(() => [])
                 ]);
+                const items = await actions.searchLibrary(query, filter, libraries);
                 if (sequence !== nativeSearchSequence || !window.location.hash.startsWith('#/search')) return;
-                const anime = libraries.filter((library) => value(library, 'MediaType') === 'anime')
-                    .map((library) => pathKey(value(library, 'Path')));
-                renderLocalResults((result.Items || []).map((item) => {
-                    const path = pathKey(item.Path);
-                    const type = anime.some((root) => root && path.startsWith(root + '/')) ? 'anime' : item.Type === 'Movie' ? 'movie' : 'series';
-                    return {...item, category:type};
-                }).filter(item => !filter || item.category === filter));
+                renderLocalResults(items);
             }
 
             function openIndexedItem(id) {

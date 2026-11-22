@@ -1,7 +1,6 @@
+using Microsoft.AspNetCore.Http;
 using System.Net;
 using System.Net.Http.Json;
-using System.Net.Sockets;
-using System.Collections.Concurrent;
 using Jellyfin.Plugin.LinkAdder.Configuration;
 using Jellyfin.Plugin.LinkAdder.Models;
 using Jellyfin.Plugin.LinkAdder.Services;
@@ -17,26 +16,38 @@ namespace Jellyfin.Plugin.LinkAdder.Api;
 [Route("Plugins/LinkAdder")]
 public sealed class LinkAdderController : ControllerBase
 {
-    private static readonly ConcurrentDictionary<string, SemaphoreSlim> AddLocks = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly SemaphoreSlim[] AddLocks = Enumerable.Range(0, 64).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
+    private Guid UserId => MediaOperationLimits.UserId(User);
+
+    private static SemaphoreSlim GetAddLock(string destination, string title) =>
+        AddLocks[(uint)StringComparer.OrdinalIgnoreCase.GetHashCode(destination + "\n" + title) % AddLocks.Length];
+
     private readonly LinkAdderService _service;
     private readonly IHttpClientFactory _clients;
     private readonly ILibraryManager _library;
     private readonly AutomationService _automation;
     private readonly DiscoveryService _discovery;
     private readonly DownloadService _downloads;
+    private readonly SourcePlayback _playback;
     private static readonly int TorrentBridgePort =
         int.TryParse(Environment.GetEnvironmentVariable("TORRENT_BRIDGE_PORT"), out var port) && port is > 0 and <= 65535
             ? port : 18781;
 
-    public LinkAdderController(IHttpClientFactory clients, ILibraryManager library, AutomationService automation, DiscoveryService discovery, DownloadService downloads)
+    public LinkAdderController(IHttpClientFactory clients, ILibraryManager library, AutomationService automation, DiscoveryService discovery, DownloadService downloads, SourcePlayback playback)
     {
         _clients = clients;
-        _service = new LinkAdderService(clients.CreateClient(), Plugin.GetSourceSnapshot());
+        _service = new LinkAdderService(Plugin.GetSourceSnapshot());
         _library = library;
         _automation = automation;
         _discovery = discovery;
         _downloads = downloads;
+        _playback = playback;
     }
+
+    [AllowAnonymous]
+    [AcceptVerbs("GET", "HEAD")]
+    [Route("Playback/{ticket}")]
+    public Task Playback(string ticket, CancellationToken ct) => _playback.StreamAsync(HttpContext, ticket, ct);
 
     [HttpGet("CanManage")]
     [Authorize(Policy = Policies.RequiresElevation)]
@@ -55,10 +66,10 @@ public sealed class LinkAdderController : ControllerBase
             return BadRequest(new { error = "Paste a BitTorrent magnet link." });
         }
 
-        using var client = _clients.CreateClient();
+        using var client = _clients.CreateClient("LinkAdderTorrentBridge");
         client.Timeout = TimeSpan.FromSeconds(40);
         using var request = new HttpRequestMessage(HttpMethod.Post, $"http://127.0.0.1:{TorrentBridgePort}/check");
-        request.Headers.Add("X-Torrent-Bridge", "jellyfin");
+        request.Headers.Add("X-Torrent-Bridge", Plugin.GetBridgeSecret());
         request.Content = JsonContent.Create(new { magnet = input.Magnet });
         try
         {
@@ -100,10 +111,10 @@ public sealed class LinkAdderController : ControllerBase
 
         try
         {
-            using var client = _clients.CreateClient();
+            using var client = _clients.CreateClient("LinkAdderTorrentBridge");
             client.BaseAddress = new Uri($"http://127.0.0.1:{TorrentBridgePort}");
             client.Timeout = TimeSpan.FromSeconds(28);
-            client.DefaultRequestHeaders.Add("X-Torrent-Bridge", "jellyfin");
+            client.DefaultRequestHeaders.Add("X-Torrent-Bridge", Plugin.GetBridgeSecret());
             var limits = await client.GetFromJsonAsync<TorrentBridgeLimits>("limits", ct);
             if (limits is null || limits.MaxBytes <= 0)
                 return StatusCode(503, new { error = "The torrent bridge did not report its memory limit." });
@@ -136,7 +147,7 @@ public sealed class LinkAdderController : ControllerBase
 
             var displayTitle = input.Year is >= 1900 and <= 2100 ? $"{input.Title} ({input.Year})" : input.Title;
             var preview = LinkAdderService.PlanTorrentStreams(displayTitle, input.MediaType, urls);
-            var addLock = AddLocks.GetOrAdd($"{destination.Path}\n{preview.Title}", _ => new SemaphoreSlim(1, 1));
+            var addLock = GetAddLock(destination.Path, preview.Title);
             await addLock.WaitAsync(ct);
             AddResult result;
             try { result = _service.Write(preview, destination.Path); }
@@ -158,7 +169,8 @@ public sealed class LinkAdderController : ControllerBase
     private static Uri? ValidatedTorrentLibraryUrl(string? value) =>
         Uri.TryCreate(value, UriKind.Absolute, out var url) && url.Scheme == "http" && url.Host == "127.0.0.1"
         && url.Port == TorrentBridgePort && url.AbsolutePath.StartsWith("/library/", StringComparison.Ordinal)
-        && url.UserInfo.Length == 0 && url.Query.Length == 0 && url.Fragment.Length == 0 ? url : null;
+        && url.UserInfo.Length == 0 && url.Fragment.Length == 0
+        && System.Text.RegularExpressions.Regex.IsMatch(url.Query, @"\A\?ticket=[A-Za-z0-9_-]{43}\z") ? url : null;
 
     public sealed record PrepareTorrentRequest(string Title, int? Year, string MediaType, IReadOnlyList<TorrentCandidate> Releases);
     public sealed record TorrentCandidate(string? Magnet, long? Size, int? Seeders, string? Resolution);
@@ -196,7 +208,24 @@ public sealed class LinkAdderController : ControllerBase
     public sealed record SourceAvailability(bool? FtpEnabled, bool? TorrentEnabled, bool? AdultTorrentModeEnabled);
 
     [HttpGet("Libraries")]
-    public ActionResult<IReadOnlyList<LibraryOption>> Libraries() => Ok(LibrariesForValidation().OrderBy(x => x.Name).ToArray());
+    public ActionResult<IReadOnlyList<LibraryView>> Libraries() => Ok(_library.GetVirtualFolders()
+        .Select(folder => new LibraryView(folder.ItemId ?? string.Empty, folder.Name ?? "Library",
+            CollectionType(folder.Name, folder.CollectionType?.ToString())))
+        .Where(folder => folder.Id.Length != 0 && folder.MediaType.Length != 0)
+        .OrderBy(folder => folder.Name).ToArray());
+
+    [HttpGet("LibraryPaths")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public ActionResult<IReadOnlyList<LibraryOption>> LibraryPaths() => Ok(LibrariesForValidation().OrderBy(x => x.Name).ToArray());
+
+    [HttpGet("AddDestinations")]
+    public ActionResult<IReadOnlyList<AddDestinationView>> AddDestinations()
+    {
+        var libraries = LibrariesForValidation();
+        return Ok(new[] { "movie", "series", "anime" }.Select(type => FindAddDestination(type, libraries))
+            .OfType<LibraryOption>().Select(library => new AddDestinationView(library.LibraryId, library.Name, library.MediaType,
+                !string.IsNullOrWhiteSpace(DefaultLibraryPath(library.MediaType)))).ToArray());
+    }
 
     [HttpGet("SearchUiSettings")]
     public ActionResult<SearchUiSettings> SearchUiSettings() =>
@@ -216,6 +245,7 @@ public sealed class LinkAdderController : ControllerBase
     }
 
     [HttpGet("SearchDestinations")]
+    [Authorize(Policy = Policies.RequiresElevation)]
     public ActionResult<SearchDestinationSettings> SearchDestinations()
     {
         var options = Plugin.Instance?.Configuration.SearchDestinations ?? new SearchDestinationOptions();
@@ -244,8 +274,13 @@ public sealed class LinkAdderController : ControllerBase
     }
 
     [HttpPost("Remote/Search")]
+    [RequestSizeLimit(8192)]
     public async Task<ActionResult<IReadOnlyList<RemoteSearchResult>>> SearchRemote([FromBody] RemoteSearchRequest request, CancellationToken ct)
     {
+        using var operation = MediaOperationLimits.TryEnter(UserId);
+        if (operation is null)
+            return StatusCode(429, new { error = "Too many media operations. Try again shortly." });
+
         if (!Plugin.MediaServerSourcesEnabled) return Ok(Array.Empty<RemoteSearchResult>());
 
         try
@@ -259,8 +294,13 @@ public sealed class LinkAdderController : ControllerBase
     }
 
     [HttpPost("Preview")]
+    [RequestSizeLimit(8192)]
     public async Task<ActionResult<PreviewResult>> Preview([FromBody] PreviewRequest request, CancellationToken ct)
     {
+        using var operation = MediaOperationLimits.TryEnter(UserId);
+        if (operation is null)
+            return StatusCode(429, new { error = "Too many media operations. Try again shortly." });
+
         try
         {
             return Ok(await _service.PreviewAsync(request.Url, request.MediaType, request.Title, ct).ConfigureAwait(false));
@@ -269,11 +309,21 @@ public sealed class LinkAdderController : ControllerBase
         {
             return BadRequest(new { error = error.Message });
         }
+        catch (Exception error) when (!ct.IsCancellationRequested
+            && error is HttpRequestException or WebException or IOException or OperationCanceledException)
+        {
+            return StatusCode(502, new { error = "Could not read the configured media source." });
+        }
     }
 
     [HttpPost("Add")]
+    [RequestSizeLimit(8192)]
     public async Task<ActionResult<AddResult>> Add([FromBody] AddRequest request, CancellationToken ct)
     {
+        using var operation = MediaOperationLimits.TryEnter(UserId);
+        if (operation is null)
+            return StatusCode(429, new { error = "Too many media operations. Try again shortly." });
+
         try
         {
             var mediaType = NormalizeMediaType(request.MediaType);
@@ -282,19 +332,26 @@ public sealed class LinkAdderController : ControllerBase
                 return BadRequest(new { error = $"Set the {mediaType} default save location on the Media Sources page." });
 
             var preview = await _service.PreviewAsync(request.Url, mediaType, request.Title, ct).ConfigureAwait(false);
-            var addLock = AddLocks.GetOrAdd($"{option.Path}\n{preview.Title}", _ => new SemaphoreSlim(1, 1));
+            var addLock = GetAddLock(option.Path, preview.Title);
             await addLock.WaitAsync(ct).ConfigureAwait(false);
             AddResult result;
             try
             {
-                result = _service.Write(preview, option.Path);
+                result = _service.Write(preview, option.Path, _playback.CreateUrl);
             }
             finally
             {
                 addLock.Release();
             }
             _library.QueueLibraryScan();
-            return Ok(result with { Refresh = "Jellyfin library scan queued." });
+            return Ok(result with
+            {
+                Created = result.Created.Select(file => Path.GetRelativePath(option.Path, file)).ToArray(),
+                Skipped = result.Skipped.Select(file => Path.GetRelativePath(option.Path, file)).ToArray(),
+                TitlePath = result.Title,
+                LibraryId = option.LibraryId,
+                Refresh = "Jellyfin library scan queued."
+            });
         }
         catch (InvalidOperationException ex)
         {
@@ -317,7 +374,20 @@ public sealed class LinkAdderController : ControllerBase
         var mediaType = NormalizeMediaType(request.MediaType);
         var option = FindDownloadDestination(mediaType);
         if (option is null) return BadRequest(new { error = $"Set the {mediaType} default save location on the Media Sources page." });
-        return Ok(await _downloads.DownloadAsync(_service, request, option.Path, ct).ConfigureAwait(false));
+        try
+        {
+            var result = await _downloads.DownloadAsync(_service, request, option.Path, ct).ConfigureAwait(false);
+            return result is null ? StatusCode(429, new { error = "A download is already running." }) : Ok(result);
+        }
+        catch (InvalidOperationException error)
+        {
+            return BadRequest(new { error = error.Message });
+        }
+        catch (Exception error) when (!ct.IsCancellationRequested
+            && error is HttpRequestException or WebException or IOException or OperationCanceledException)
+        {
+            return StatusCode(502, new { error = "The transfer failed or exceeded its limits." });
+        }
     }
 
     [HttpPost("Downloads")]
@@ -327,8 +397,13 @@ public sealed class LinkAdderController : ControllerBase
         var mediaType = NormalizeMediaType(request.MediaType);
         var option = FindDownloadDestination(mediaType);
         if (option is null) return BadRequest(new { error = $"Set the {mediaType} default save location on the Media Sources page." });
-        return Accepted(_downloads.Start(_service, request, option.Path));
+        var job = _downloads.Start(request, option.Path);
+        return job is null ? StatusCode(429, new { error = "The download queue is full." }) : Accepted(job);
     }
+
+    [HttpDelete("Downloads/{id}")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public IActionResult CancelDownload(string id) => _downloads.Cancel(id) ? Accepted() : NotFound();
 
     [HttpGet("Downloads/{id}")]
     [Authorize(Policy = Policies.RequiresElevation)]
@@ -487,13 +562,28 @@ public sealed class LinkAdderController : ControllerBase
     }
 
     [HttpPost("Requests")]
+    [RequestSizeLimit(8192)]
     public ActionResult<MediaRequestView> SubmitRequest([FromBody] SubmitMediaRequest request)
     {
-        var source = _service.ValidateConfiguredSource(request.Url);
-        var mediaType = NormalizeMediaType(request.MediaType);
+        if (UserId == Guid.Empty) return Forbid();
+        using var rate = MediaOperationLimits.AcquireRate(UserId);
+        if (!rate.IsAcquired) return StatusCode(429);
+        Uri source;
+        string mediaType;
+        try
+        {
+            source = _service.ValidateConfiguredSource(request.Url);
+            mediaType = NormalizeMediaType(request.MediaType);
+        }
+        catch (InvalidOperationException error)
+        {
+            return BadRequest(new { error = error.Message });
+        }
         var title = string.IsNullOrWhiteSpace(request.Title) ? "Untitled" : request.Title.Trim();
+        if (title.Length > 200) return BadRequest(new { error = "Keep the title under 201 characters." });
         var item = new MediaAddRequest
         {
+            RequestedById = UserId,
             RequestedBy = User.Identity?.Name ?? "Jellyfin user",
             Title = title,
             Url = source.AbsoluteUri,
@@ -502,7 +592,8 @@ public sealed class LinkAdderController : ControllerBase
         lock (Plugin.ConfigurationSync)
         {
             var configuration = Plugin.Instance?.Configuration ?? throw new InvalidOperationException("Plugin configuration is unavailable.");
-            if (configuration.MediaRequests.Any(x => x.Url.Equals(item.Url, StringComparison.OrdinalIgnoreCase) && x.MediaType == item.MediaType))
+            if (configuration.MediaRequests.Count(x => x.RequestedById == UserId) >= 100) return StatusCode(429);
+            if (configuration.MediaRequests.Any(x => x.RequestedById == UserId && x.Url.Equals(item.Url, StringComparison.Ordinal) && x.MediaType == item.MediaType))
                 return Conflict(new { error = "This title is already requested." });
             configuration.MediaRequests.Add(item);
             Plugin.Instance!.UpdateConfiguration(configuration);
@@ -511,22 +602,26 @@ public sealed class LinkAdderController : ControllerBase
     }
 
     [HttpGet("Requests")]
-    public ActionResult<IReadOnlyList<MediaRequestView>> Requests()
+    public async Task<ActionResult<IReadOnlyList<MediaRequestView>>> Requests([FromServices] IAuthorizationService authorization)
     {
+        var elevated = (await authorization.AuthorizeAsync(User, Policies.RequiresElevation)).Succeeded;
         lock (Plugin.ConfigurationSync)
         {
             return Ok((Plugin.Instance?.Configuration.MediaRequests ?? [])
+                .Where(x => elevated || (UserId != Guid.Empty && x.RequestedById == UserId))
                 .OrderByDescending(x => x.RequestedAtUtc).Select(ToView).ToArray());
         }
     }
 
     [HttpDelete("Requests/{id}")]
-    public ActionResult DeleteRequest(string id)
+    public async Task<ActionResult> DeleteRequest(string id, [FromServices] IAuthorizationService authorization)
     {
+        var elevated = (await authorization.AuthorizeAsync(User, Policies.RequiresElevation)).Succeeded;
         lock (Plugin.ConfigurationSync)
         {
             var configuration = Plugin.Instance?.Configuration ?? throw new InvalidOperationException("Plugin configuration is unavailable.");
-            var removed = configuration.MediaRequests.RemoveAll(x => x.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+            var removed = configuration.MediaRequests.RemoveAll(x => x.Id.Equals(id, StringComparison.OrdinalIgnoreCase)
+                && (elevated || (UserId != Guid.Empty && x.RequestedById == UserId)));
             if (removed == 0) return NotFound();
             Plugin.Instance!.UpdateConfiguration(configuration);
         }
@@ -589,19 +684,47 @@ public sealed class LinkAdderController : ControllerBase
     public async Task<ActionResult<AutomationRunResult>> RunAutomation(CancellationToken ct) => Ok(await _automation.RunAsync(false, ct).ConfigureAwait(false));
 
     [HttpPost("Automation/AddTitle")]
+    [RequestSizeLimit(8192)]
     public async Task<ActionResult<AddDiscoveryTitleResult>> AddDiscoveryTitle([FromBody] AddDiscoveryTitleRequest request, CancellationToken ct)
     {
-        var mediaType = NormalizeMediaType(request.MediaType);
-        var title = (request.Title ?? string.Empty).Trim();
-        if (title.Length < 2 || string.IsNullOrWhiteSpace(request.ContentId))
+        using var operation = MediaOperationLimits.TryEnter(UserId);
+        if (operation is null)
+            return StatusCode(429, new { error = "Too many media operations. Try again shortly." });
+
+        if (string.IsNullOrWhiteSpace(request.ContentId) || request.ContentId.Length > 128)
             return BadRequest(new { error = "The discovery title is invalid." });
-        var item = new DiscoveryTitle(request.ContentId.Trim(), request.Provider?.Trim() ?? string.Empty, request.Category?.Trim() ?? string.Empty,
-            mediaType, title, request.OriginalTitle?.Trim() ?? string.Empty, request.Year, request.Rating, request.Votes, request.PosterUrl?.Trim() ?? string.Empty);
-        return Ok(await _automation.AddTitleAsync(item, request.SelectedUrl, ct).ConfigureAwait(false));
+        var catalog = await DiscoverCatalogAsync(ct).ConfigureAwait(false);
+        var item = catalog.FirstOrDefault(title => title.ContentId.Equals(request.ContentId, StringComparison.OrdinalIgnoreCase));
+        if (item is null) return NotFound(new { error = "Refresh the discovery catalog and select the title again." });
+        try
+        {
+            return Ok(await _automation.AddTitleAsync(item, request.SelectedUrl, ct).ConfigureAwait(false));
+        }
+        catch (InvalidOperationException error)
+        {
+            return Conflict(new { error = error.Message });
+        }
     }
 
     [HttpGet("Automation/Catalog")]
     public async Task<ActionResult<IReadOnlyList<DiscoveryTitle>>> AutomationCatalog(CancellationToken ct)
+    {
+        using var operation = MediaOperationLimits.TryEnter(UserId);
+        if (operation is null)
+            return StatusCode(429, new { error = "Too many media operations. Try again shortly." });
+
+        var items = await DiscoverCatalogAsync(ct).ConfigureAwait(false);
+        AutomationAddedItem[] addedItems;
+        lock (Plugin.ConfigurationSync)
+        {
+            addedItems = Plugin.Instance?.Configuration.AutomationAddedItems.ToArray() ?? [];
+        }
+        var activeAddedIds = addedItems.Where(x => x.Files.Any(System.IO.File.Exists))
+            .Select(x => x.ContentId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return Ok(items.Where(x => !activeAddedIds.Contains(x.ContentId)).ToArray());
+    }
+
+    private async Task<IReadOnlyList<DiscoveryTitle>> DiscoverCatalogAsync(CancellationToken ct)
     {
         var saved = Plugin.Instance?.Configuration.Automation ?? new AutomationOptions();
         var catalog = new AutomationOptions
@@ -618,18 +741,7 @@ public sealed class LinkAdderController : ControllerBase
             MinimumRating = saved.MinimumRating,
             MinimumVotes = saved.MinimumVotes
         };
-        var items = await _discovery.DiscoverAsync(catalog, ct).ConfigureAwait(false);
-        AutomationAddedItem[] addedItems;
-        lock (Plugin.ConfigurationSync)
-        {
-            addedItems = Plugin.Instance?.Configuration.AutomationAddedItems.ToArray() ?? [];
-        }
-
-        var activeAddedIds = addedItems
-            .Where(x => x.Files.Any(System.IO.File.Exists))
-            .Select(x => x.ContentId)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        return Ok(items.Where(x => !activeAddedIds.Contains(x.ContentId)).ToArray());
+        return await _discovery.DiscoverAsync(catalog, ct).ConfigureAwait(false);
     }
 
     [HttpGet("Automation/History")]
@@ -677,7 +789,8 @@ public sealed class LinkAdderController : ControllerBase
         .SelectMany(v => v.Locations.Select(path => new LibraryOption(
             v.Locations.Count() > 1 ? $"{v.Name} — {Path.GetFileName(path)}" : v.Name ?? "Library",
             Path.GetFullPath(path),
-            CollectionType(v.Name, v.CollectionType?.ToString()))))
+            CollectionType(v.Name, v.CollectionType?.ToString()),
+            v.ItemId ?? string.Empty)))
         .Where(x => x.MediaType.Length > 0)
         .ToArray();
 
@@ -688,10 +801,10 @@ public sealed class LinkAdderController : ControllerBase
         return LibrariesForValidation().FirstOrDefault(x => x.MediaType == mediaType && x.Path.Equals(requestedPath, StringComparison.OrdinalIgnoreCase));
     }
 
-    private LibraryOption? FindAddDestination(string mediaType)
+    private LibraryOption? FindAddDestination(string mediaType, LibraryOption[]? libraries = null)
     {
         var configuredPath = DefaultLibraryPath(mediaType);
-        var compatible = LibrariesForValidation().Where(x => x.MediaType == mediaType).ToArray();
+        var compatible = (libraries ?? LibrariesForValidation()).Where(x => x.MediaType == mediaType).ToArray();
         return string.IsNullOrWhiteSpace(configuredPath)
             ? compatible.Length == 1 ? compatible[0] : null
             : compatible.FirstOrDefault(x => Path.TrimEndingDirectorySeparator(x.Path).Equals(
@@ -738,16 +851,11 @@ public sealed class LinkAdderController : ControllerBase
     {
         if (!Uri.TryCreate(value?.Trim(), UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https" or "ftp"))
             throw new InvalidOperationException("Use a complete HTTP, HTTPS, or FTP URL.");
-        if (!IPAddress.TryParse(uri.Host, out var address) || !IsPrivate(address))
+        if (!LinkAdderService.IsSafeSourceUri(uri) || uri.Query.Length != 0)
+            throw new InvalidOperationException("Use a source directory URL without embedded credentials, query, or fragment.");
+        if (!IPAddress.TryParse(uri.Host, out var address) || !LinkAdderService.IsPrivate(address))
             throw new InvalidOperationException("Only private/local IP source URLs are allowed.");
         return uri;
     }
     private static Uri EnsureDirectoryUrl(Uri uri) => uri.AbsolutePath.EndsWith('/') ? uri : new Uri(uri.AbsoluteUri + "/");
-    private static bool IsPrivate(IPAddress address)
-    {
-        if (IPAddress.IsLoopback(address)) return true;
-        if (address.AddressFamily != AddressFamily.InterNetwork) return false;
-        var bytes = address.GetAddressBytes();
-        return bytes[0] == 10 || (bytes[0] == 172 && bytes[1] is >= 16 and <= 31) || (bytes[0] == 192 && bytes[1] == 168);
-    }
 }

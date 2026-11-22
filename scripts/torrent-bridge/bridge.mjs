@@ -1,16 +1,98 @@
 import { execFile } from 'node:child_process';
 import { once } from 'node:events';
-import { createServer, request as httpRequest } from 'node:http';
+import { createServer } from 'node:http';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { freemem, totalmem } from 'node:os';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
+import { pipeline } from 'node:stream/promises';
 import MemoryChunkStore from 'memory-chunk-store';
 import WebTorrent from 'webtorrent';
 
 const run = promisify(execFile);
 const videoExtension = /\.(mp4|mkv|webm|mov|m4v|avi|ts|m2ts)$/i;
 const MiB = 1024 * 1024;
+const playbackWindowBytes = 4 * MiB;
+
+async function* readPlaybackRange(torrent, file, start, end, signal) {
+    const { pieceLength, store, bitfield } = torrent;
+    const firstByte = file.offset + start;
+    const lastByte = file.offset + end;
+    const lastPiece = Math.floor(lastByte / pieceLength);
+    const windowPieces = Math.max(1, Math.floor(playbackWindowBytes / pieceLength));
+    const readPiece = promisify(store.get.bind(store));
+    for (let first = Math.floor(firstByte / pieceLength); first <= lastPiece; first += windowPieces) {
+        signal.throwIfAborted();
+        const last = Math.min(lastPiece, first + windowPieces - 1);
+        // WebTorrent stream selections are independent, even when two ranges overlap.
+        torrent._select(first, last, 1, null, true);
+        try {
+            for (let piece = first; piece <= last; piece++) {
+                signal.throwIfAborted();
+                if (!bitfield.get(piece)) torrent.critical(piece, piece);
+                while (!bitfield.get(piece)) {
+                    await once(torrent, 'verified', { signal });
+                }
+                const offset = Math.max(0, firstByte - piece * pieceLength);
+                const length = Math.min(pieceLength - offset, lastByte - piece * pieceLength - offset + 1);
+                yield await readPiece(piece, { offset, length });
+            }
+        } finally {
+            if (!torrent.destroyed) torrent._deselect(first, last, true);
+        }
+    }
+}
+
+async function serveVideo(request, response, torrent, file) {
+    const headers = {
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'no-store',
+        'Content-Type': file.type,
+        'X-Content-Type-Options': 'nosniff'
+    };
+    let start = 0;
+    let end = file.length - 1;
+    let status = 200;
+    if (request.headers.range) {
+        const range = /^bytes=(\d*)-(\d*)$/i.exec(request.headers.range);
+        if (range && (range[1] || range[2])) {
+            start = range[1] ? Number(range[1]) : Math.max(0, file.length - Number(range[2]));
+            end = range[1] && range[2] ? Math.min(end, Number(range[2])) : end;
+        }
+        if (!range || (!range[1] && !range[2]) || start > end) {
+            response.writeHead(416, { ...headers, 'Content-Range': `bytes */${file.length}` }).end();
+            return;
+        }
+        status = 206;
+        headers['Content-Range'] = `bytes ${start}-${end}/${file.length}`;
+    }
+    headers['Content-Length'] = end - start + 1;
+    response.writeHead(status, headers);
+    if (request.method === 'HEAD') {
+        response.end();
+        return;
+    }
+    response.flushHeaders();
+    const stop = new AbortController();
+    const cancel = () => stop.abort();
+    response.once('close', cancel);
+    torrent.once('close', cancel);
+    response.setTimeout(30_000, cancel);
+    try {
+        await pipeline(readPlaybackRange(torrent, file, start, end, stop.signal), response, { signal: stop.signal });
+    } catch {
+        response.destroy();
+    } finally {
+        response.off('close', cancel);
+        response.off('timeout', cancel);
+        torrent.off('close', cancel);
+    }
+}
+
+function streamPath(torrent, file) {
+    return `/webtorrent/${torrent.infoHash}/${file.path.split(/[/\\]/).map(encodeURIComponent).join('/')}`;
+}
 
 function infoHash(magnet) {
     if (typeof magnet !== 'string' || !magnet.startsWith('magnet:?')) return null;
@@ -57,18 +139,61 @@ export async function startBridge({
         lsd: false, tracker: { announce: ['udp://tracker.opentrackr.org:1337/announce', 'udp://open.demonii.com:1337/announce'] },
         webSeeds: false, utPex: false, natUpnp: false, natPmp: false
     }),
-    probeVideo = probe
+    probeVideo = probe, secret = process.env.TORRENT_BRIDGE_SECRET
 } = {}) {
+    if (typeof secret !== 'string' || Buffer.byteLength(secret) < 32) {
+        client.destroy();
+        throw new Error('TORRENT_BRIDGE_SECRET must contain at least 32 bytes.');
+    }
+
+    function matchesSecret(actual, expected) {
+        if (typeof actual !== 'string') return false;
+        const supplied = Buffer.from(actual);
+        const wanted = Buffer.from(expected);
+        return supplied.length === wanted.length && timingSafeEqual(supplied, wanted);
+    }
+
+    function signature(path) {
+        return createHmac('sha256', secret).update(path).digest('base64url');
+    }
+
+    function signedPath(path) {
+        return path + '?ticket=' + signature(path);
+    }
+
+    function authorizedPath(url = '') {
+        const marker = url.lastIndexOf('?ticket=');
+        if (marker < 0) return null;
+        const path = url.slice(0, marker);
+        return matchesSecret(url.slice(marker + 8), signature(path)) ? path : null;
+    }
+
     client.on('error', error => console.error(error.message));
-    const streaming = client.createServer({ hostname: '127.0.0.1', origin: false });
-    streaming.server.listen(streamPort, '127.0.0.1');
+    const streaming = createServer(async (request, response) => {
+        if (request.headers.host !== `127.0.0.1:${streaming.address().port}`) {
+            response.writeHead(403).end();
+            return;
+        }
+        const path = authorizedPath(request.url);
+        const selected = torrent;
+        const file = selected?.ready && !selected.destroyed && selected.files.find(item =>
+            item.length > 0 && videoExtension.test(item.name) && streamPath(selected, item) === path);
+        if (!file || !['GET', 'HEAD'].includes(request.method)) {
+            response.writeHead(404).end();
+            return;
+        }
+        activeReaders++;
+        response.once('close', () => activeReaders--);
+        await serveVideo(request, response, selected, file);
+    });
+    streaming.listen(streamPort, '127.0.0.1');
     try {
-        await once(streaming.server, 'listening');
+        await once(streaming, 'listening');
     } catch (error) {
         client.destroy();
         throw error;
     }
-    const streamOrigin = 'http://127.0.0.1:' + streaming.server.address().port;
+    const streamOrigin = 'http://127.0.0.1:' + streaming.address().port;
     let torrent;
     let lastResult;
     let currentHash;
@@ -135,7 +260,7 @@ export async function startBridge({
     }
 
     async function assessSample(hash, activeTorrent, file, sample) {
-        const streamUrl = new URL(file.streamURL, streamOrigin).href;
+        const streamUrl = new URL(signedPath(streamPath(activeTorrent, file)), streamOrigin).href;
         const videoMbps = await probeVideo(streamUrl, file.length).catch(() => null);
         const likelySmooth = sample.complete && videoMbps !== null && sample.mbps >= videoMbps * 1.5;
         return {
@@ -149,7 +274,7 @@ export async function startBridge({
             peers: activeTorrent.numPeers,
             streamUrl,
             libraryFiles: activeTorrent.files.flatMap((item, index) => item.length && videoExtension.test(item.name)
-                ? [{ index, name:item.name, url: `http://127.0.0.1:${api.address().port}/library/${hash}/${index}/${encodeURIComponent(item.name)}` }] : []),
+                ? [{ index, name:item.name, url: `http://127.0.0.1:${api.address().port}${signedPath(`/library/${hash}/${index}/${encodeURIComponent(item.name)}`)}` }] : []),
             selectedFile: activeTorrent.files.indexOf(file)
         };
     }
@@ -202,23 +327,12 @@ export async function startBridge({
         try {
             const selected = await getTorrent(hash);
             const file = selected.files[index];
-            if (!file || encodeURIComponent(file.name) !== filename || !videoExtension.test(file.name)) {
+            if (!file?.length || encodeURIComponent(file.name) !== filename || !videoExtension.test(file.name)) {
                 response.writeHead(404).end();
                 return;
             }
             if (response.destroyed) return;
-            const headers = request.headers.range ? { Range: request.headers.range } : {};
-            const upstream = httpRequest(new URL(file.streamURL, streamOrigin), { method: request.method, headers }, incoming => {
-                response.writeHead(incoming.statusCode, incoming.headers);
-                incoming.pipe(response);
-            });
-            response.once('close', () => upstream.destroy());
-            upstream.on('error', () => {
-                if (!response.headersSent) response.writeHead(503).end();
-                else response.destroy();
-            });
-            upstream.setTimeout(30_000, () => upstream.destroy());
-            upstream.end();
+            await serveVideo(request, response, selected, file);
         } catch {
             if (!response.destroyed) response.writeHead(503, { 'Retry-After': '5' }).end();
         }
@@ -229,14 +343,16 @@ export async function startBridge({
             response.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
             response.end(JSON.stringify(body));
         };
-        const library = /^\/library\/([a-f0-9]{40}|[a-z2-7]{32})\/(\d{1,6})\/([^/?]+)$/.exec(request.url ?? '');
+        if (request.headers.host !== `127.0.0.1:${api.address().port}`) return send(403, { error: 'Invalid host.' });
+        const canManage = matchesSecret(request.headers['x-torrent-bridge'], secret);
+        const library = /^\/library\/([a-f0-9]{40}|[a-z2-7]{32})\/(\d{1,6})\/([^/?]+)$/.exec(authorizedPath(request.url) ?? '');
         if (library && (request.method === 'GET' || request.method === 'HEAD')) {
             return serveLibrary(request, response, library[1], Number(library[2]), library[3]);
         }
-        if (request.method === 'GET' && request.url === '/limits' && request.headers['x-torrent-bridge'] === 'jellyfin') {
+        if (request.method === 'GET' && request.url === '/limits' && canManage) {
             return send(200, { maxBytes });
         }
-        if (request.method !== 'POST' || !['/check', '/select'].includes(request.url) || request.headers['x-torrent-bridge'] !== 'jellyfin') {
+        if (request.method !== 'POST' || !['/check', '/select'].includes(request.url) || !canManage) {
             return send(404, { error: 'Unknown endpoint.' });
         }
         if (busy) return send(409, { error: 'A torrent check is already running.' });
@@ -295,6 +411,7 @@ export async function startBridge({
             const closed = new Promise(done => api.close(done));
             api.closeAllConnections();
             streaming.close();
+            streaming.closeAllConnections();
             await Promise.all([closed, new Promise(done => client.destroy(done))]);
         }
     };
