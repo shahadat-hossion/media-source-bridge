@@ -4,6 +4,7 @@ public sealed class PluginConfiguration : BasePluginConfiguration
 {
     public bool ReplaceDefaultSearch { get; set; } = true;
     public bool FtpSourcesEnabled { get; set; } = true;
+    public int SearchRequestsPerMinute { get; set; }
     public bool TorrentSourcesEnabled { get; set; } = true;
     public bool AdultTorrentModeEnabled { get; set; }
     public SearchDestinationOptions SearchDestinations { get; set; } = new();

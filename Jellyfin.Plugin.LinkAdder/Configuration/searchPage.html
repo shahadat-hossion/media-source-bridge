@@ -8,9 +8,14 @@
 .lidPosterButton{display:block;width:100%;padding:0;border:0;background:transparent;cursor:pointer}
 .lidPosterButton:focus-visible{outline:2px solid #00a4dc;outline-offset:-2px}
 .lidTorrentTitle{padding:0;border:0;background:transparent;color:inherit;text-align:left;cursor:pointer}
+.lidSearchStatusRow{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}
+.lidSearchStatusRow a{margin-inline-start:auto}
 </style>
 <div class="lidSearchBox"><div class="inputContainer"><label class="inputLabel" for="lidQuery">Movie, show or anime</label><input id="lidQuery" is="emby-input" autocomplete="off" placeholder="Iron Man"></div><select id="lidMediaType" aria-label="Media type"><option value="">All media</option><option value="anime">Anime</option><option value="movie">Movies</option><option value="series">Shows</option><option value="other">Other</option></select><select id="lidSource" aria-label="Search source"><option value="">All sources</option><option value="ftp">FTP</option><option value="torrent">Torrent</option></select><button id="lidSearch" is="emby-button" class="raised button-submit"><span>Search</span></button></div>
-<p id="lidStatus" class="lidStatus" aria-live="polite"></p>
+<div class="lidSearchStatusRow">
+    <p id="lidStatus" class="lidStatus" aria-live="polite"></p>
+    <a class="raised emby-button" href="https://github.com/shahadat-hossion/media-source-bridge/issues/new" target="_blank" rel="noopener noreferrer">Report a problem</a>
+</div>
 <section id="lidLocalSection" class="lidSection" hidden><div class="lidSectionHead"><h3>In Your Library</h3><span id="lidLocalCount" class="lidMuted"></span></div><div id="lidLocal" class="lidGrid"></div></section>
 <section id="lidRemoteSection" class="lidSection" hidden><div class="lidSectionHead"><h3>Available from Media Servers</h3><span id="lidRemoteCount" class="lidMuted"></span></div><div id="lidRemote" class="lidGrid"></div></section>
 <details id="lidAdmin" class="lidAdmin" hidden><summary><strong>Search button settings</strong></summary><p class="lidMuted">Choose whether this unified search replaces Jellyfin's standard header search button.</p><label class="lidCheck"><input id="lidReplaceSearch" type="checkbox" is="emby-checkbox"><span>Replace Jellyfin's default search button</span></label><button id="lidSaveSettings" is="emby-button" class="raised"><span>Save</span></button><p id="lidSettingsStatus" class="lidMuted"></p></details>
@@ -84,16 +89,12 @@ function renderRemote(items, localItems) {
     }).catch(() => { for (const button of buttons) button.textContent = 'Actions unavailable'; });
 }
 async function searchRemote(query, token, filter, localSearch) {
-    const types = filter ? [filter] : ['movie', 'series', 'anime'];
-    const settled = await Promise.allSettled(types.map(async type => {
-        const rows = await call('Remote/Search', 'POST', {mediaType:type, query});
-        return rows.map(row => ({name:value(row,'Name'), url:value(row,'Url'), source:value(row,'Source'), posterUrl:value(row,'PosterUrl'), type}));
-    }));
+    const rows = await call('Remote/SearchTitles', 'POST', {mediaType:filter, query});
     const localItems = await localSearch;
     if (token !== searchToken) return;
-    const items = settled.flatMap(result => result.status === 'fulfilled' ? result.value : []);
+    const items = rows.map(row => ({name:value(row,'Name'), url:value(row,'Url'), source:value(row,'Source'), posterUrl:value(row,'PosterUrl'), type:value(row,'MediaType')}));
     renderRemote(items, localItems);
-    return {items, error:settled.every(result => result.status === 'rejected') ? settled[0].reason.message : ''};
+    return {items};
 }
 
 let torrentSearchModule;

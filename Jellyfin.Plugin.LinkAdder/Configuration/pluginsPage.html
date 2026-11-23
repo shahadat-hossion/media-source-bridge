@@ -25,6 +25,25 @@
                     <span>Setup Media</span><span class="bridgeArrow" aria-hidden="true">→</span>
                 </a>
             </nav>
+            <details class="bridgeGuide">
+                <summary>Setup guide</summary>
+                <div class="bridgeAdminGuide" hidden>
+                    <h3>Set up your server</h3>
+                    <ol>
+                        <li>Create a Movies or Shows library in Jellyfin with a folder Jellyfin can write to. In Docker, mount the folder read-write and select its container path in Jellyfin.</li>
+                        <li>Open <a href="#/configurationpage?name=localispservers">Setup Media</a>. Under <strong>Default Save Locations</strong>, choose your libraries and select <strong>Save default locations</strong>.</li>
+                        <li>Under <strong>Add Server</strong>, enter a name, media type, and full private FTP, HTTP, or HTTPS directory URL. Enter FTP credentials if required. Select <strong>Test connection</strong>, then <strong>Add server</strong> when the test passes.</li>
+                    </ol>
+                    <p>If the test fails, verify the URL and credentials and check that Jellyfin can reach the server. To recheck saved sources, use <strong>Configured Servers → Test all servers</strong>.</p>
+                    <p>For torrent search, open <strong>Torrent Providers → Browse Providers</strong>. Select <strong>Test</strong> on a provider, then <strong>Add</strong> when the test passes.</p>
+                </div>
+                <h3>Add your first title</h3>
+                <ol>
+                    <li>Open <a href="#/configurationpage?name=localispsearch">Search</a>, choose a media type, and search for a title. If you have a URL from a configured source, use <a href="#/configurationpage?name=localispimportlink">Import Link</a>.</li>
+                    <li>Select <strong>FTP</strong> on a media server result. Jellyfin scans the library and opens the title when it is ready.</li>
+                </ol>
+                <p>If you need a source or destination library configured, contact your Jellyfin administrator.</p>
+            </details>
         </div>
     </div>
     <style>
@@ -110,7 +129,26 @@
             margin-inline-start: auto;
             color: var(--bridge-accent);
         }
-        #LocalIspPluginsPage .bridgeLanding a:focus-visible {
+        #LocalIspPluginsPage .bridgeGuide {
+            margin-top: 1.5rem;
+            padding: 1rem 1.25rem;
+            border: 1px solid #1b4861;
+            border-radius: .9rem;
+            background: #0e1b29;
+            line-height: 1.55;
+        }
+        #LocalIspPluginsPage .bridgeGuide summary {
+            cursor: pointer;
+            font-weight: 750;
+        }
+        #LocalIspPluginsPage .bridgeGuide li + li {
+            margin-top: .5rem;
+        }
+        #LocalIspPluginsPage .bridgeGuide a {
+            color: var(--bridge-accent);
+        }
+        #LocalIspPluginsPage .bridgeLanding a:focus-visible,
+        #LocalIspPluginsPage .bridgeGuide summary:focus-visible {
             outline: 2px solid #fff;
             outline-offset: 3px;
         }
@@ -125,10 +163,12 @@
     <script type="text/javascript">
         (() => {
             const page = document.querySelector('#LocalIspPluginsPage');
-            const mediaSources = page.querySelector('a[href$="name=localispservers"]');
+            const mediaSources = page.querySelector('.bridgeShortcuts a[href$="name=localispservers"]');
+            const adminGuide = page.querySelector('.bridgeAdminGuide');
 
             async function updateMediaSourcesLink() {
                 mediaSources.hidden = true;
+                adminGuide.hidden = true;
                 try {
                     await ApiClient.ajax({
                         url: ApiClient.getUrl('Plugins/LinkAdder/CanManage'),
@@ -136,6 +176,7 @@
                         dataType: 'json'
                     });
                     mediaSources.hidden = false;
+                    adminGuide.hidden = false;
                 } catch {
                     // Media Sources requires administrator access.
                 }

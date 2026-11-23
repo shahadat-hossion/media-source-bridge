@@ -5,6 +5,33 @@ namespace Jellyfin.Plugin.LinkAdder.Services;
 
 internal static class MediaOperationLimits
 {
+    private static int _searchPermitLimit;
+    private static PartitionedRateLimiter<Guid>? _searchRequests;
+
+    internal static bool TrySearch(Guid user)
+    {
+        lock (Plugin.ConfigurationSync)
+        {
+            var limit = Plugin.Instance?.Configuration.SearchRequestsPerMinute ?? 0;
+            if (limit != _searchPermitLimit)
+            {
+                _searchRequests?.Dispose();
+                _searchRequests = limit <= 0 ? null : PartitionedRateLimiter.Create<Guid, Guid>(
+                    id => RateLimitPartition.GetSlidingWindowLimiter(id, _ => new SlidingWindowRateLimiterOptions
+                    {
+                        PermitLimit = limit,
+                        Window = TimeSpan.FromMinutes(1),
+                        SegmentsPerWindow = 6,
+                        QueueLimit = 0
+                    }));
+                _searchPermitLimit = limit;
+            }
+
+            using var lease = _searchRequests?.AttemptAcquire(user);
+            return lease?.IsAcquired ?? true;
+        }
+    }
+
     private static readonly ConcurrencyLimiter ExpensiveOperations = new(new ConcurrencyLimiterOptions
     {
         PermitLimit = 8,

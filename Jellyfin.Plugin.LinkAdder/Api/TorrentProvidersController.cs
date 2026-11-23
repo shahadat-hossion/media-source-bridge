@@ -102,9 +102,6 @@ public sealed class TorrentProvidersController : ControllerBase
         if (filter == "adult" && !(await authorization.AuthorizeAsync(User, Policies.RequiresElevation)).Succeeded)
             return Forbid();
 
-        using var operation = MediaOperationLimits.TryEnter(MediaOperationLimits.UserId(User));
-        if (operation is null) return StatusCode(429, new { error = "Too many media operations. Try again shortly." });
-
         TorrentProvider[] providers;
         lock (Plugin.ConfigurationSync)
         {
@@ -117,6 +114,9 @@ public sealed class TorrentProvidersController : ControllerBase
                 ? configuration.TorrentProviders.Where(provider => TorrentProviderCatalog.SupportsFilter(provider, filter)).ToArray()
                 : [];
         }
+        if (providers.Length > 0 && !MediaOperationLimits.TrySearch(MediaOperationLimits.UserId(User)))
+            return StatusCode(429, new { error = "Search request limit reached. Try again shortly." });
+
         var responses = await Task.WhenAll(providers.Select(async provider =>
         {
             try { return (Results: await TorrentProviderCatalog.SearchAsync(provider, query, filter, ct), Failed: false); }

@@ -207,6 +207,32 @@ public sealed class LinkAdderController : ControllerBase
 
     public sealed record SourceAvailability(bool? FtpEnabled, bool? TorrentEnabled, bool? AdultTorrentModeEnabled);
 
+    [HttpGet("SearchLimit")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public IActionResult GetSearchLimit()
+    {
+        lock (Plugin.ConfigurationSync)
+            return Ok(new SearchLimit(Plugin.Instance!.Configuration.SearchRequestsPerMinute));
+    }
+
+    [HttpPost("SearchLimit")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public IActionResult SaveSearchLimit([FromBody] SearchLimit settings)
+    {
+        if (settings.RequestsPerMinute is not >= 0)
+            return BadRequest(new { error = "Enter a whole number of zero or more." });
+
+        lock (Plugin.ConfigurationSync)
+        {
+            var plugin = Plugin.Instance!;
+            plugin.Configuration.SearchRequestsPerMinute = settings.RequestsPerMinute.Value;
+            plugin.UpdateConfiguration(plugin.Configuration);
+            return Ok(settings);
+        }
+    }
+
+    public sealed record SearchLimit(int? RequestsPerMinute);
+
     [HttpGet("Libraries")]
     public ActionResult<IReadOnlyList<LibraryView>> Libraries() => Ok(_library.GetVirtualFolders()
         .Select(folder => new LibraryView(folder.ItemId ?? string.Empty, folder.Name ?? "Library",
@@ -277,11 +303,9 @@ public sealed class LinkAdderController : ControllerBase
     [RequestSizeLimit(8192)]
     public async Task<ActionResult<IReadOnlyList<RemoteSearchResult>>> SearchRemote([FromBody] RemoteSearchRequest request, CancellationToken ct)
     {
-        using var operation = MediaOperationLimits.TryEnter(UserId);
-        if (operation is null)
-            return StatusCode(429, new { error = "Too many media operations. Try again shortly." });
-
         if (!Plugin.MediaServerSourcesEnabled) return Ok(Array.Empty<RemoteSearchResult>());
+        if (!MediaOperationLimits.TrySearch(UserId))
+            return StatusCode(429, new { error = "Search request limit reached. Try again shortly." });
 
         try
         {
@@ -291,6 +315,42 @@ public sealed class LinkAdderController : ControllerBase
         {
             return BadRequest(new { error = ex.Message });
         }
+    }
+
+    [HttpPost("Remote/SearchTitles")]
+    [RequestSizeLimit(8192)]
+    public async Task<IActionResult> SearchRemoteTitles([FromBody] RemoteSearchRequest request, CancellationToken ct)
+    {
+        string[] types = request.MediaType switch
+        {
+            null or "" => ["movie", "series", "anime"],
+            "movie" or "series" or "anime" => [request.MediaType],
+            _ => []
+        };
+        if (types.Length == 0 || request.Query?.Trim().Length is not (>= 2 and <= 200))
+            return BadRequest(new { error = "Enter between 2 and 200 characters and choose a supported media type." });
+
+        if (!Plugin.MediaServerSourcesEnabled) return Ok(Array.Empty<object>());
+        if (!MediaOperationLimits.TrySearch(UserId))
+            return StatusCode(429, new { error = "Search request limit reached. Try again shortly." });
+        var groups = await Task.WhenAll(types.Select(async mediaType =>
+        {
+            try
+            {
+                return (MediaType: mediaType, Items: await _service.SearchRemoteAsync(mediaType, request.Query, ct), Error: (string?)null);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return (MediaType: mediaType, Items: (IReadOnlyList<RemoteSearchResult>)[], Error: (string?)ex.Message);
+            }
+        }));
+        if (groups.All(group => group.Error is not null))
+            return BadRequest(new { error = groups[0].Error });
+
+        return Ok(groups.SelectMany(group => group.Items.Select(item => new
+        {
+            group.MediaType, item.Name, item.Url, item.Source, item.PosterUrl
+        })));
     }
 
     [HttpPost("Preview")]

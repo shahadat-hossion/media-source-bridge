@@ -418,7 +418,37 @@ public sealed partial class LinkAdderService
         if (queryTokens.All(token => nameTokens.Contains(token))) return 600;
         if (queryTokens.All(token => nameTokens.Any(word => word == token || (token.Length >= 2 && word.StartsWith(token, StringComparison.Ordinal))))) return 500;
         if(normalizedName.Contains(normalizedQuery,StringComparison.OrdinalIgnoreCase))return 400;
+        for (var start = 0; start <= nameTokens.Length - queryTokens.Count; start++)
+        {
+            var typoCount = 0;
+            var offset = 0;
+            for (; offset < queryTokens.Count; offset++)
+            {
+                var token = queryTokens[offset];
+                var word = nameTokens[start + offset];
+                if (token == word) continue;
+                if (typoCount != 0 || token.Length < 4 || !IsSingleEdit(token, word)) break;
+                typoCount++;
+            }
+            if (offset == queryTokens.Count) return start == 0 ? 300 : 250;
+        }
         return 0;
+    }
+
+    private static bool IsSingleEdit(ReadOnlySpan<char> query, ReadOnlySpan<char> title)
+    {
+        if (Math.Abs(query.Length - title.Length) > 1) return false;
+        if (query.Length > title.Length) return IsSingleEdit(title, query);
+
+        var mismatch = 0;
+        while (mismatch < query.Length && query[mismatch] == title[mismatch]) mismatch++;
+        if (query.Length < title.Length) return query[mismatch..].SequenceEqual(title[(mismatch + 1)..]);
+        if (mismatch == query.Length) return true;
+        if (query[(mismatch + 1)..].SequenceEqual(title[(mismatch + 1)..])) return true;
+
+        var next = mismatch + 1;
+        return next < query.Length && query[mismatch] == title[next] && query[next] == title[mismatch]
+            && query[(next + 1)..].SequenceEqual(title[(next + 1)..]);
     }
 
     private static string NormalizeSearchText(string value)
@@ -434,7 +464,7 @@ public sealed partial class LinkAdderService
     }
 
     private static bool IsStructuralFolder(string name) =>
-        StructuralRegex().IsMatch(name) || YearResolutionFolderRegex().IsMatch(name);
+        StructuralRegex().IsMatch(name) || YearResolutionFolderRegex().IsMatch(name) || SeriesRangeFolderRegex().IsMatch(name);
 
     private RemoteRoot[] RemoteRoots(string mediaType)
     {
@@ -505,6 +535,7 @@ public sealed partial class LinkAdderService
             using var httpTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             httpTimeout.CancelAfter(SourceHttp.Timeout);
             using var httpRequest = new HttpRequestMessage(HttpMethod.Get, folder);
+            httpRequest.Headers.UserAgent.ParseAdd("MediaSourceBridge/2.7");
             using var client = root.Username.Length == 0 ? null : new HttpClient(SourceHandler(root));
             using var httpResponse = await (client ?? SourceHttp).SendAsync(httpRequest,
                 HttpCompletionOption.ResponseHeadersRead, httpTimeout.Token).ConfigureAwait(false);
@@ -634,6 +665,8 @@ public sealed partial class LinkAdderService
         { ".nfo", ".srt", ".ass", ".ssa", ".sub", ".vtt", ".txt", ".sfv", ".xml", ".json" };
     [GeneratedRegex(@"^(?:\(?\d{4}\)?(?:\s*(?:[-–—&/,]|to)\s*\d{4})*|\d{4}\s+and\s+(?:before|earlier|older)|[a-z]\s*[-–]\s*[a-z]|(?:tv[- ]?series|anime(?:[- ]?tv)?|movies|shows))$", RegexOptions.IgnoreCase)]
     private static partial Regex StructuralRegex();
+    [GeneratedRegex(@"^(?:anime[- ])?tv\s+series\s+[\p{S}\s]*[a-z0-9]\s*[-–—]\s*[a-z0-9]$", RegexOptions.IgnoreCase)]
+    private static partial Regex SeriesRangeFolderRegex();
     [GeneratedRegex(@"^\(?\d{4}\)?\s+(?:2160p|1080p|720p|480p)(?:\s*&\s*(?:before|earlier|older))?$", RegexOptions.IgnoreCase)]
     private static partial Regex YearResolutionFolderRegex();
     [GeneratedRegex(@"^(?:samples?|trailers?|featurettes)(?:\.[^.]+)?$", RegexOptions.IgnoreCase)]

@@ -13,6 +13,45 @@ namespace LinkAdder.Tests;
 
 public sealed class SourceBoundaryTests
 {
+    [Fact]
+    public async Task FindsAnimeUnderDecoratedAlphabeticalFolders()
+    {
+        const string Bucket = "/anime/Anime-TV Series ♦  N  —  S/";
+        await using var server = CreateServer();
+        server.MapGet("/anime/", (HttpContext context) => context.Request.Headers.UserAgent.Count == 0
+            ? string.Empty
+            : $"<a href=\"{Uri.EscapeDataString(Bucket.Split('/')[2])}/\">N–S</a>");
+        server.MapGet(Bucket, () => "<a href=\"Solo%20Leveling/\">Solo Leveling</a>");
+        var origin = await StartServerAsync(server);
+        var media = new LinkAdderService([new CustomSource { Name = "Anime", MediaType = "anime", Url = origin + "/anime/" }]);
+
+        var results = await media.SearchRemoteAsync("anime", "Solo Leveling", CancellationToken.None, includePosters: false);
+
+        Assert.Equal("Solo Leveling", Assert.Single(results).Name);
+    }
+
+    [Theory]
+    [InlineData("Better Call Saul", "Better Call Saul")]
+    [InlineData("Beter Call Saul", "Better Call Saul")]
+    [InlineData("Bettre Call Saul", "Better Call Saul")]
+    [InlineData("Better Calk Saul", "Better Call Saul")]
+    [InlineData("Better Cally Saul", "Better Call Saul")]
+    [InlineData("Bettre Calk Saul", null)]
+    public async Task FindsTvTitlesUnderAlphabeticalFoldersWithOneTypo(string query, string? expected)
+    {
+        const string BucketName = "TV Series ♥  A  —  L";
+        await using var server = CreateServer();
+        server.MapGet("/tv/", () => $"<a href=\"{Uri.EscapeDataString(BucketName)}/\">A–L</a>");
+        server.MapGet($"/tv/{BucketName}/", () =>
+            "<a href=\"Better%20Call%20Saul/\">Better Call Saul</a><a href=\"Better%20Call%20Paul/\">Better Call Paul</a>");
+        var origin = await StartServerAsync(server);
+        var media = new LinkAdderService([new CustomSource { Name = "TV", MediaType = "series", Url = origin + "/tv/" }]);
+
+        var results = await media.SearchRemoteAsync("series", query, CancellationToken.None, includePosters: false);
+
+        Assert.Equal(expected, results.FirstOrDefault()?.Name);
+    }
+
     [Theory]
     [InlineData("http://127.0.0.1/media-other/video.mp4")]
     [InlineData("http://user:secret@127.0.0.1/media/video.mp4")]

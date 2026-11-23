@@ -15,12 +15,12 @@ export async function searchLibrary(query, filter, libraries) {
         ImageTypeLimit: 1, EnableImageTypes: 'Primary'
     };
     const normal = filter === 'anime' ? Promise.resolve({ Items: [] }) : ApiClient.getItems(userId, {
-        ...options, IncludeItemTypes: filter === 'movie' ? 'Movie' : filter === 'series' ? 'Series,Episode' : 'Movie,Series,Episode'
+        ...options, IncludeItemTypes: filter === 'movie' ? 'Movie' : filter === 'series' ? 'Series' : 'Movie,Series'
     });
     const [result, ...animeResults] = await Promise.all([
         normal,
         ...animeLibraries.map(ParentId => ApiClient.getItems(userId, {
-            ...options, ParentId, IncludeItemTypes: 'Movie,Series,Episode'
+            ...options, ParentId, IncludeItemTypes: 'Movie,Series'
         }).catch(() => ({ Items: [] })))
     ]);
     const anime = new Map(animeResults.flatMap(group => group.Items || []).map(item => [item.Id, item]));

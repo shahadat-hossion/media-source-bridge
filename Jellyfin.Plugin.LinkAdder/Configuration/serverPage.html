@@ -3,43 +3,53 @@
 <h2>Media Source Setup</h2>
 <p class="ftpMuted">Add, test, export, and import private FTP, HTTP, or HTTPS media sources. Only Jellyfin administrators can manage servers.</p>
 <style>
-.ftpPanel{margin:1.25rem 0;padding:1rem;border:1px solid rgba(255,255,255,.18);border-radius:.5rem}.ftpRow{display:grid;grid-template-columns:1fr 1fr;gap:1rem}.ftpActions{display:flex;gap:.75rem;flex-wrap:wrap;margin-top:.75rem}.ftpSource{display:flex;align-items:center;justify-content:space-between;gap:.75rem;padding:.75rem;border-bottom:1px solid rgba(255,255,255,.12);border-radius:.35rem}.ftpSourceText{min-width:0;overflow-wrap:anywhere}.ftpSourceResult{margin-top:.25rem}.ftpMuted{opacity:.72;font-size:.9rem}.ftpCheck{display:flex;align-items:center;gap:.55rem;margin-top:1rem}.ftpSuccess{background:rgba(33,135,57,.32);border-color:#4caf63}.ftpFailed{background:rgba(179,38,30,.3);border-color:#e05a52}.ftpButtonSuccess{background:#218739!important;color:#fff!important}.ftpButtonFailed{background:#b3261e!important;color:#fff!important}#ftpAccessError{display:none;padding:1rem;border-radius:.5rem;background:rgba(179,38,30,.25)}@media(max-width:600px){.ftpRow{grid-template-columns:1fr}.ftpSource{align-items:flex-start;flex-direction:column}}
+.ftpPanel{margin:1.25rem 0;padding:1rem;border:1px solid rgba(255,255,255,.18);border-radius:.5rem}#LocalIspServerPage .ftpPanel>summary{cursor:pointer}#LocalIspServerPage .ftpPanel[open]>summary{margin-bottom:1rem}.ftpRow{display:grid;grid-template-columns:1fr 1fr;gap:1rem}.ftpActions{display:flex;gap:.75rem;flex-wrap:wrap;margin-top:.75rem}.ftpSource{display:flex;align-items:center;justify-content:space-between;gap:.75rem;padding:.75rem;border-bottom:1px solid rgba(255,255,255,.12);border-radius:.35rem}.ftpSourceText{min-width:0;overflow-wrap:anywhere}.ftpSourceResult{margin-top:.25rem}.ftpMuted{opacity:.72;font-size:.9rem}.ftpCheck{display:flex;align-items:center;gap:.55rem;margin-top:1rem}.ftpSuccess{background:rgba(33,135,57,.32);border-color:#4caf63}.ftpFailed{background:rgba(179,38,30,.3);border-color:#e05a52}.ftpButtonSuccess{background:#218739!important;color:#fff!important}.ftpButtonFailed{background:#b3261e!important;color:#fff!important}#ftpAccessError{display:none;padding:1rem;border-radius:.5rem;background:rgba(179,38,30,.25)}@media(max-width:600px){.ftpRow{grid-template-columns:1fr}.ftpSource{align-items:flex-start;flex-direction:column}}
 </style>
 <div id="ftpAccessError">Administrator access is required to manage media sources.</div>
 <div id="ftpManager" style="display:none">
-<section class="ftpPanel">
-<h3>Source Availability</h3>
+<details class="ftpPanel">
+<summary><strong>Source Availability</strong></summary>
 <label class="ftpCheck"><input id="ftpSourcesEnabled" type="checkbox" disabled> Use media servers (FTP, HTTP, HTTPS)</label>
 <label class="ftpCheck"><input id="torrentSourcesEnabled" type="checkbox" disabled> Use torrent sources</label>
 <label class="ftpCheck"><input id="adultTorrentModeEnabled" type="checkbox" disabled> Enable 18+ torrent mode</label>
 <p class="ftpMuted">Adds an Adult torrents search filter for administrators while torrent sources are enabled.</p>
 <p class="ftpMuted">Changes save immediately. Connection tests remain available for paused sources.</p>
 <p id="sourceAvailabilityStatus" role="status"></p>
-</section>
-<section class="ftpPanel">
-<h3>Default Save Locations</h3>
+</details>
+<details class="ftpPanel">
+<summary><strong>Search limit</strong></summary>
+<div class="inputContainer">
+    <label class="inputLabel" for="searchRequestsPerMinute">Search requests per minute per user</label>
+    <input id="searchRequestsPerMinute" is="emby-input" type="number" min="0" max="2147483647" step="1" required disabled aria-describedby="searchLimitHelp">
+</div>
+<p id="searchLimitHelp" class="ftpMuted">Applies to every user. A search that queries both media servers and torrent providers uses two requests. Enter 0 for unlimited search.</p>
+<div class="ftpActions"><button type="button" is="emby-button" class="raised button-submit" id="saveSearchLimitBtn" disabled>Save search limit</button></div>
+<p id="searchLimitStatus" role="status"></p>
+</details>
+<details class="ftpPanel">
+<summary><strong>Default Save Locations</strong></summary>
 <p class="ftpMuted">Choose where movies, shows, and anime are saved. Discover, Search, Import Link, Add Media, and downloads use these libraries automatically.</p>
 <div class="ftpRow"><div class="selectContainer"><label class="selectLabel">Movies destination</label><select id="searchMovieLibrary" is="emby-select"></select></div><div class="selectContainer"><label class="selectLabel">Shows destination</label><select id="searchSeriesLibrary" is="emby-select"></select></div></div>
 <div class="selectContainer"><label class="selectLabel">Anime destination</label><select id="searchAnimeLibrary" is="emby-select"></select></div>
 <div class="ftpActions"><button is="emby-button" class="raised button-submit" id="saveSearchDestinationsBtn"><span>Save default locations</span></button></div>
-</section>
-<section class="ftpPanel">
-<h3>Add Server</h3>
+</details>
+<details class="ftpPanel">
+<summary><strong>Add Server</strong></summary>
 <div class="ftpRow"><div class="inputContainer"><label class="inputLabel">Server title</label><input id="sourceName" is="emby-input" placeholder="ISP Movies Server"></div><div class="selectContainer"><label class="selectLabel">Media type</label><select id="sourceType" is="emby-select"><option value="movie">Movies</option><option value="series">TV Series</option><option value="both">Movies &amp; TV Series (Both)</option><option value="anime">Anime</option></select></div></div>
 <div class="inputContainer"><label class="inputLabel">FTP or HTTP link</label><input id="sourceUrl" is="emby-input" placeholder="ftp://192.168.1.10/Movies/"></div>
 <div class="ftpRow"><div class="inputContainer"><label class="inputLabel">Username (optional)</label><input id="sourceUser" is="emby-input" autocomplete="off"></div><div class="inputContainer"><label class="inputLabel">Password (optional)</label><input id="sourcePassword" type="password" is="emby-input" autocomplete="new-password"></div></div>
 <div class="ftpActions"><button is="emby-button" class="raised" id="testSourceBtn"><span>Test connection</span></button><button is="emby-button" class="raised button-submit" id="saveSourceBtn"><span>Add server</span></button></div>
 <p id="sourceTestStatus" class="ftpMuted" aria-live="polite"></p>
-</section>
+</details>
 <details class="ftpPanel" id="configuredServers">
-<summary style="cursor:pointer"><strong>Configured Servers</strong></summary>
+<summary><strong>Configured Servers</strong></summary>
 <div class="ftpActions"><button is="emby-button" class="raised" id="testAllSourcesBtn"><span>Test all servers</span></button><button is="emby-button" class="raised" id="exportSourcesBtn"><span>Export servers</span></button><button is="emby-button" class="raised" id="importSourcesBtn"><span>Import servers</span></button><input id="importSourcesFile" type="file" accept="application/json,.json" hidden></div>
 <label class="ftpCheck"><input id="exportCredentials" type="checkbox"> Include saved usernames and passwords in export</label>
 <p class="ftpMuted">Imports merge new servers and skip entries with a matching URL and media type.</p>
 <div id="sourceList"></div>
 </details>
-<section class="ftpPanel">
-<h3>Torrent Providers</h3>
+<details class="ftpPanel">
+<summary><strong>Torrent Providers</strong></summary>
 <details id="torrentCatalog">
 <summary><strong>Browse Providers</strong></summary>
 <div class="ftpRow" style="margin-top:1rem">
@@ -62,7 +72,7 @@
 <p id="torrentProviderStatus" role="status"></p>
 <h4>Configured Providers</h4>
 <div id="torrentProviderList"></div>
-</section>
+</details>
 </div>
 <p id="ftpStatus" style="min-height:1.5em;font-weight:600" aria-live="polite"></p>
 <script type="text/javascript">(function(){
@@ -71,7 +81,36 @@ const call=async(path,method,body)=>{try{return await ApiClient.ajax({url:ApiCli
 const val=(x,k)=>x?.[k[0].toLowerCase()+k.slice(1)]??x?.[k];
 function fillLibrarySelect(selector,libraries,mediaType,selected){let options=libraries.filter(x=>x.mediaType===mediaType);q(selector).innerHTML='<option value="">Choose a library</option>'+options.map(x=>'<option value="'+esc(x.path)+'" '+(x.path===selected?'selected':'')+'>'+esc(x.name)+'</option>').join('')}
 async function loadSearchDestinations(){let rawLibraries=await call('LibraryPaths','GET'),libraries=rawLibraries.map(x=>({name:val(x,'Name'),path:val(x,'Path'),mediaType:val(x,'MediaType')})),settings=await call('SearchDestinations','GET');fillLibrarySelect('#searchMovieLibrary',libraries,'movie',val(settings,'MovieLibraryPath'));fillLibrarySelect('#searchSeriesLibrary',libraries,'series',val(settings,'SeriesLibraryPath'));fillLibrarySelect('#searchAnimeLibrary',libraries,'anime',val(settings,'AnimeLibraryPath'))}
-async function loadPage(){q('#ftpManager').style.display='none';q('#ftpAccessError').style.display='none';try{await call('CanManage','GET');q('#ftpManager').style.display='';await Promise.all([loadSources(),loadSearchDestinations(),loadSourceAvailability(),loadTorrentProviders().catch(e=>{q('#torrentProviderStatus').textContent=e.message})])}catch(e){q('#ftpAccessError').style.display='block';q('#ftpStatus').textContent=e.message}}
+async function loadPage(){q('#ftpManager').style.display='none';q('#ftpAccessError').style.display='none';try{await call('CanManage','GET');q('#ftpManager').style.display='';await Promise.all([loadSources(),loadSearchDestinations(),loadSourceAvailability(),loadSearchLimit(),loadTorrentProviders().catch(e=>{q('#torrentProviderStatus').textContent=e.message})])}catch(e){q('#ftpAccessError').style.display='block';q('#ftpStatus').textContent=e.message}}
+
+async function loadSearchLimit(){
+    try {
+        const settings = await call('SearchLimit', 'GET');
+        q('#searchRequestsPerMinute').value = val(settings, 'RequestsPerMinute');
+        q('#searchRequestsPerMinute').disabled = false;
+        q('#saveSearchLimitBtn').disabled = false;
+    } catch (error) {
+        q('#searchLimitStatus').textContent = error.message;
+    }
+}
+
+q('#saveSearchLimitBtn').onclick = async () => {
+    const input = q('#searchRequestsPerMinute');
+    if (!input.reportValidity()) return;
+    const button = q('#saveSearchLimitBtn');
+    const status = q('#searchLimitStatus');
+    button.disabled = true;
+    input.disabled = true;
+    try {
+        await call('SearchLimit', 'POST', { requestsPerMinute: input.valueAsNumber });
+        status.textContent = 'Search limit saved.';
+    } catch (error) {
+        status.textContent = error.message;
+    } finally {
+        input.disabled = false;
+        button.disabled = false;
+    }
+};
 const sourceSwitches=[['#ftpSourcesEnabled','FtpEnabled','Media servers'],['#torrentSourcesEnabled','TorrentEnabled','Torrent sources'],['#adultTorrentModeEnabled','AdultTorrentModeEnabled','18+ torrent mode']];
 const availabilityStatus=q('#sourceAvailabilityStatus');
 async function loadSourceAvailability(){

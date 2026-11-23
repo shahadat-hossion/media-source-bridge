@@ -358,6 +358,8 @@ public sealed class ClientScriptController : ControllerBase
                     #${remoteSectionId} .localIspNativeInputRow .inputContainer { flex:1;min-width:0;margin:0; }
                     @media(max-width:600px) { #${remoteSectionId} .localIspNativeInputRow { flex-wrap:wrap; } #${remoteSectionId} .localIspNativeInputRow .inputContainer { flex:1 1 75%; } }
                     #${remoteSectionId} .localIspNativeInputRow select { padding:.55em;background:#242424;color:inherit;border:1px solid #777;border-radius:.3em; }
+                    #${remoteSectionId} .localIspSearchHelp { position:absolute;inset-block-start:1.2em;inset-inline-end:3.3%;display:flex;justify-content:flex-end; }
+                    @media(max-width:1300px) { #${remoteSectionId} .localIspSearchHelp { position:static;margin:.55em 3.3% 0; } }
                     #${remoteSectionId} .localIspResultSection { margin-top:1.6em; }
                     #${remoteSectionId} .localIspRemoteGrid { display:grid!important;grid-template-columns:repeat(auto-fill,minmax(10em,1fr));gap:1.75rem 1rem;padding:0 clamp(1rem,3vw,3rem); }
                     #${remoteSectionId} .localIspRemoteGrid > .localIspRemoteCard { display:block;width:100%!important;min-width:0!important;max-width:none!important;margin:0!important;padding:0!important; }
@@ -384,6 +386,10 @@ public sealed class ClientScriptController : ControllerBase
                 section = document.createElement('section');
                 section.id = remoteSectionId;
                 section.innerHTML = '<div class="localIspNativeFields"><div class="localIspNativeInputRow"><span class="material-icons search" aria-hidden="true"></span><div class="inputContainer"><input id="localIspNativeQuery" class="emby-input" type="text" placeholder="Search" autocomplete="off"></div><select id="localIspNativeMediaType" aria-label="Media type"><option value="">All media</option><option value="anime">Anime</option><option value="movie">Movies</option><option value="series">Shows</option><option value="other">Other</option></select><select id="localIspNativeSource" aria-label="Search source"><option value="">All sources</option><option value="ftp">FTP</option><option value="torrent">Torrent</option></select></div></div><div id="localIspCombinedResults" class="localIspResultSection"><h2 class="sectionTitle sectionTitle-cards focuscontainer-x padded-left padded-right">Search Results</h2><div class="localIspSearchMessage">Enter at least two characters to search your library and configured media servers.</div></div>';
+                const help = document.createElement('div');
+                help.className = 'localIspSearchHelp';
+                help.innerHTML = '<a class="raised emby-button" href="https://github.com/shahadat-hossion/media-source-bridge/issues/new" target="_blank" rel="noopener noreferrer">Report a problem</a>';
+                section.insertBefore(help, section.querySelector('.localIspResultSection'));
                 document.body.appendChild(section);
                 return section;
             }
@@ -515,7 +521,7 @@ public sealed class ClientScriptController : ControllerBase
                         target.querySelector('.localIspTorrentTitle').onclick = () => button.click();
                     }
                 }
-                if (nativeTorrentStatus) {
+                if (nativeTorrentStatus && nativeTorrentStatus !== nativeRemoteStatus) {
                     const message = document.createElement('p');
                     message.className = 'localIspSearchMessage';
                     message.textContent = nativeTorrentStatus;
@@ -556,16 +562,18 @@ public sealed class ClientScriptController : ControllerBase
                     return;
                 }
                 section.innerHTML = '<h2 class="sectionTitle sectionTitle-cards focuscontainer-x padded-left padded-right">Search Results</h2><div class="localIspSearchMessage">Searching media sources…</div>';
-                const mediaTypes = filter ? [filter] : ['movie', 'series', 'anime'];
-                const settled = await Promise.allSettled(mediaTypes.map((mediaType) => pluginCall('Remote/Search', 'POST', { mediaType, query })
-                    .then((rows) => rows.map((row) => ({ name:value(row, 'Name'), url:value(row, 'Url'), source:value(row, 'Source'), posterUrl:value(row, 'PosterUrl'), mediaType })) )));
-                if (sequence !== nativeSearchSequence || !window.location.hash.startsWith('#/search')) return;
-                const results = settled.flatMap((result) => result.status === 'fulfilled' ? result.value : [])
-                    .filter((item, index, all) => all.findIndex((other) => other.url === item.url && other.mediaType === item.mediaType) === index);
-                if (settled.every((result) => result.status === 'rejected')) {
-                    nativeRemoteStatus = settled[0].reason.message || 'Media servers could not be searched.';
+                try {
+                    const rows = await pluginCall('Remote/SearchTitles', 'POST', { mediaType:filter, query });
+                    if (sequence !== nativeSearchSequence || !window.location.hash.startsWith('#/search')) return;
+                    renderRemoteResults(rows.map(row => ({
+                        name:value(row, 'Name'), url:value(row, 'Url'), source:value(row, 'Source'),
+                        posterUrl:value(row, 'PosterUrl'), mediaType:value(row, 'MediaType')
+                    })));
+                } catch (error) {
+                    if (sequence !== nativeSearchSequence || !window.location.hash.startsWith('#/search')) return;
+                    nativeRemoteStatus = error.message || 'Media servers could not be searched.';
+                    renderRemoteResults([]);
                 }
-                renderRemoteResults(results);
             }
 
             async function searchLocalLibrary(query, sequence, filter) {
@@ -611,6 +619,7 @@ public sealed class ClientScriptController : ControllerBase
                         select.append(option);
                     }
                 }).catch(() => {});
+                let remoteSearch = Promise.resolve();
                 const search = (delay) => {
                     clearTimeout(nativeSearchTimer);
                     const sequence = ++nativeSearchSequence;
@@ -623,9 +632,16 @@ public sealed class ClientScriptController : ControllerBase
                         nativeTorrentStatus = '';
                         const torrentOnly = nativeMediaType === 'adult' || nativeMediaType === 'other';
                         if (!nativeSource && !torrentOnly && query.length >= 2) searchLocalLibrary(query, sequence, nativeMediaType).catch(() => {});
-                        if ((!torrentOnly && nativeSource !== 'torrent') || query.length < 2) searchRemoteSources(query, sequence, nativeMediaType);
-                        else renderCombinedResults();
-                        if (query.length >= 2 && nativeSource !== 'ftp') searchNativeTorrents(query, sequence, nativeMediaType);
+                        const filter = nativeMediaType;
+                        const sourceFilter = nativeSource;
+                        if (query.length >= 2) renderCombinedResults();
+                        remoteSearch = remoteSearch.then(async () => {
+                            if (sequence !== nativeSearchSequence || !window.location.hash.startsWith('#/search')) return;
+                            await Promise.allSettled([
+                                ((!torrentOnly && sourceFilter !== 'torrent') || query.length < 2) && searchRemoteSources(query, sequence, filter),
+                                query.length >= 2 && sourceFilter !== 'ftp' && searchNativeTorrents(query, sequence, filter)
+                            ]);
+                        });
                     }, delay);
                 };
                 input.addEventListener('input', () => search(450));

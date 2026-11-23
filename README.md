@@ -32,6 +32,7 @@ For torrent playback, also [install the matching torrent bridge](#install-the-to
 ## Features
 
 - Search multiple private FTP, HTTP, and HTTPS directory indexes from Jellyfin.
+- Search TV and anime by series title, with typo-tolerant matching for private media sources.
 - Search configured torrent providers from Jellyfin and identify matching titles with a **Torrent** badge.
 - Paste a direct media file or folder link from a configured source and analyze it before adding.
 - Keep title search and direct-link importing on separate, focused Jellyfin pages.
@@ -120,12 +121,18 @@ Use **Configured Servers → Test all servers** when troubleshooting several sou
 ## Search and add media
 
 1. Select the **Search & Add Media** icon in the Jellyfin web header or open **Search** from the Media Source Bridge landing page.
-2. Enter at least two characters from a movie, show, episode, or anime title.
+2. Enter at least two characters from a movie, show, or anime title. TV and anime series appear as series cards. Open a card to browse its episodes.
 3. Review the single **Search Results** grid. Matching library items appear first, followed by titles available from configured media servers.
 4. Choose **Play** or **Open** for an item already in your library. For a private-source result, select the **FTP** add action. The same action supports configured HTTP and HTTPS sources.
 5. The plugin creates the STRM in the default save location and queues a library scan. Once indexed, it plays the movie or opens the show. If indexing takes more than 90 seconds, select **Check again** once Jellyfin has had time to finish.
 
 Administrators can expand **Search button settings** on the unified search page to keep Jellyfin's standard search button or replace it with the plugin search. The plugin search icon is always labelled **Search & Add Media** for accessibility.
+
+Private media search ranks exact titles and partial matches first, then checks for a single typo in longer words. It indexes alphabetized TV and anime folders so titles inside those folders can appear in search.
+
+### Set a search limit
+
+Open **Setup Media → Search limit** as a Jellyfin administrator. Enter the maximum requests per minute for each user and select **Save search limit**. Use **0** for unlimited search, which is the default. Media server and torrent requests share the same allowance, while local Jellyfin library searches and imports have separate handling. One search can use two requests when both remote sources are enabled.
 
 Jellyfin handles metadata, artwork, transcoding, and playback normally. The remote server must remain reachable whenever a stream is played.
 
@@ -247,6 +254,8 @@ Movies are placed in a title folder. Series are grouped into season folders when
 
 ## Troubleshooting
 
+Use **Report a problem** in the upper-right of Search to open the project's [GitHub issue form](https://github.com/shahadat-hossion/media-source-bridge/issues/new). Include the plugin version, what you searched for, and what you expected to see. Remove credentials and private server addresses from screenshots or logs before posting.
+
 <details>
 <summary><strong>Search returns no results</strong></summary>
 
@@ -254,6 +263,7 @@ Movies are placed in a title folder. Series are grouped into season folders when
 - Try a shorter title without a release year or punctuation.
 - Confirm that the correct Movies, Shows, or Anime tab is selected.
 - Check whether the provider renamed, moved, or temporarily disabled the remote folder.
+- If you see **Search request limit reached**, wait briefly or ask an administrator to check **Setup Media → Search limit**.
 </details>
 
 <details>
