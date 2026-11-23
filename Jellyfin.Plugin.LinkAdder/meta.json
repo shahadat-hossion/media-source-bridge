@@ -7,8 +7,8 @@
   "overview": "Search private media sources and add streams or download media to Jellyfin libraries.",
   "owner": "shahadat-hossion",
   "targetAbi": "12.0.0.0",
-  2026-11-23T17:49:16Z",
-  "version": "2.7.18.0",
+  "timestamp": "2026-11-23T17:49:16Z",
+  "version": "2.7.19.0",
   "status": "Active",
   "autoUpdate": false,
   "assemblies": []

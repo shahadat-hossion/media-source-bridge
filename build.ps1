@@ -6,6 +6,11 @@ $projectRoot = $PSScriptRoot
 $projectFile = Join-Path $projectRoot 'Jellyfin.Plugin.LinkAdder\Jellyfin.Plugin.LinkAdder.csproj'
 $publishDirectory = Join-Path $projectRoot 'dist\LinkAdder'
 $version = ([xml](Get-Content -Raw -LiteralPath $projectFile)).Project.PropertyGroup.Version
+$metaPath = Join-Path $projectRoot 'Jellyfin.Plugin.LinkAdder\meta.json'
+$metadata = Get-Content -Raw -LiteralPath $metaPath | ConvertFrom-Json
+if ($metadata.version -ne $version) {
+    throw "Plugin metadata version must match the project version ($version)."
+}
 $packageVersion = $version -replace '\.0$', ''
 $packagePath = Join-Path $projectRoot "dist\Media-Source-Bridge-$packageVersion.zip"
 
@@ -18,7 +23,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "dotnet publish failed with exit code $LASTEXITCODE."
 }
 
-Copy-Item -LiteralPath (Join-Path $projectRoot 'Jellyfin.Plugin.LinkAdder\meta.json') -Destination $publishDirectory -Force
+Copy-Item -LiteralPath $metaPath -Destination $publishDirectory -Force
 
 if (Test-Path -LiteralPath $packagePath) {
     Remove-Item -LiteralPath $packagePath -Force
