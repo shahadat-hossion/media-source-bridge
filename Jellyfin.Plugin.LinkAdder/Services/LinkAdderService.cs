@@ -96,7 +96,8 @@ public sealed partial class LinkAdderService
         var source=ValidateConfiguredSource(sourceUrl); IReadOnlyList<Uri> videos=IsVideo(source)?[source]:await CrawlVideosAsync(source.AbsolutePath.EndsWith('/') ? source : new UriBuilder(source) { Path = source.AbsolutePath + "/" }.Uri,ct).ConfigureAwait(false); if(videos.Count==0) throw new InvalidOperationException("No supported video files were found."); var title=string.IsNullOrWhiteSpace(requestedTitle)?InferTitle(source,mediaType):CleanName(requestedTitle); return new(title,MakePlan(videos,mediaType,title));
     }
 
-    public AddResult Write(PreviewResult preview, string outputRoot, Func<string, string>? playbackUrl = null)
+    public AddResult Write(PreviewResult preview, string outputRoot, Func<string, string>? playbackUrl = null,
+        Action<int, int>? progress = null)
     {
         var created = new List<string>();
         var skipped = new List<string>();
@@ -119,6 +120,7 @@ public sealed partial class LinkAdderService
             if (exists && !upgrade)
             {
                 skipped.Add(destination);
+                progress?.Invoke(created.Count, skipped.Count);
                 continue;
             }
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
@@ -137,6 +139,7 @@ public sealed partial class LinkAdderService
             {
                 File.Delete(temporary);
             }
+            progress?.Invoke(created.Count, skipped.Count);
         }
         return new(created,skipped,"Library scan requested.")
         {

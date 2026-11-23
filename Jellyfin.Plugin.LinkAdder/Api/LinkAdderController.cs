@@ -1,13 +1,17 @@
 using Microsoft.AspNetCore.Http;
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Json;
 using Jellyfin.Plugin.LinkAdder.Configuration;
 using Jellyfin.Plugin.LinkAdder.Models;
 using Jellyfin.Plugin.LinkAdder.Services;
 using MediaBrowser.Common.Api;
+using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.Providers;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.LinkAdder.Api;
 
@@ -17,6 +21,8 @@ namespace Jellyfin.Plugin.LinkAdder.Api;
 public sealed class LinkAdderController : ControllerBase
 {
     private static readonly SemaphoreSlim[] AddLocks = Enumerable.Range(0, 64).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
+    private sealed record ImportProgress(int Added, int Skipped, int Total, bool Indexing = false);
+    private static readonly ConcurrentDictionary<(Guid User, Guid Request), ImportProgress> ActiveImports = new();
     private Guid UserId => MediaOperationLimits.UserId(User);
 
     private static SemaphoreSlim GetAddLock(string destination, string title) =>
@@ -376,13 +382,24 @@ public sealed class LinkAdderController : ControllerBase
         }
     }
 
+    [HttpGet("AddProgress/{id:guid}")]
+    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
+    public ActionResult AddProgress(Guid id) =>
+        Ok(ActiveImports.TryGetValue((UserId, id), out var progress) ? progress : null);
+
     [HttpPost("Add")]
     [RequestSizeLimit(8192)]
-    public async Task<ActionResult<AddResult>> Add([FromBody] AddRequest request, CancellationToken ct)
+    public async Task<ActionResult<AddResult>> Add([FromBody] AddRequest request, [FromServices] ILibraryMonitor monitor,
+        [FromServices] IDirectoryService directories, [FromServices] ILogger<LinkAdderController> logger, CancellationToken ct)
     {
         using var operation = MediaOperationLimits.TryEnter(UserId);
         if (operation is null)
             return StatusCode(429, new { error = "Too many media operations. Try again shortly." });
+
+        var progressKey = (UserId, request.ProgressId.GetValueOrDefault());
+        var reportProgress = request.ProgressId.HasValue;
+        if (reportProgress && !ActiveImports.TryAdd(progressKey, new ImportProgress(0, 0, 0)))
+            return Conflict(new { error = "An import with this progress ID is already running." });
 
         try
         {
@@ -397,20 +414,26 @@ public sealed class LinkAdderController : ControllerBase
             AddResult result;
             try
             {
-                result = _service.Write(preview, option.Path, _playback.CreateUrl);
+                result = _service.Write(preview, option.Path, _playback.CreateUrl, reportProgress
+                    ? (added, skipped) => ActiveImports[progressKey] = new ImportProgress(added, skipped, preview.Files.Count)
+                    : null);
             }
             finally
             {
                 addLock.Release();
             }
-            _library.QueueLibraryScan();
+            if (reportProgress)
+                ActiveImports[progressKey] = new ImportProgress(result.Created.Count, result.Skipped.Count, preview.Files.Count, Indexing: true);
+            var indexed = await TryIndexImportAsync(option.Path, result, mediaType, directories, logger, ct).ConfigureAwait(false);
+            if (result.TitlePath is { } titlePath) monitor.ReportFileSystemChanged(titlePath);
+            if (!indexed) _library.QueueLibraryScan();
             return Ok(result with
             {
                 Created = result.Created.Select(file => Path.GetRelativePath(option.Path, file)).ToArray(),
                 Skipped = result.Skipped.Select(file => Path.GetRelativePath(option.Path, file)).ToArray(),
                 TitlePath = result.Title,
                 LibraryId = option.LibraryId,
-                Refresh = "Jellyfin library scan queued."
+                Refresh = indexed ? "Jellyfin indexed the title." : "Jellyfin library scan queued."
             });
         }
         catch (InvalidOperationException ex)
@@ -424,6 +447,10 @@ public sealed class LinkAdderController : ControllerBase
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return StatusCode(500, new { error = "Could not write STRM files. Check that Jellyfin can write to the library folder and retry." });
+        }
+        finally
+        {
+            if (reportProgress) ActiveImports.TryRemove(progressKey, out _);
         }
     }
 
@@ -859,6 +886,45 @@ public sealed class LinkAdderController : ControllerBase
         var configuredPath = DefaultLibraryPath(mediaType);
         var requestedPath = string.IsNullOrWhiteSpace(configuredPath) ? string.Empty : Path.GetFullPath(configuredPath);
         return LibrariesForValidation().FirstOrDefault(x => x.MediaType == mediaType && x.Path.Equals(requestedPath, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private async Task<bool> TryIndexImportAsync(string destination, AddResult result, string mediaType,
+        IDirectoryService directories, ILogger logger, CancellationToken ct)
+    {
+        if (result.TitlePath is not { } titlePath || _library.FindByPath(destination, true) is not Folder parent)
+            return false;
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(8));
+        var scanLock = GetAddLock(destination, string.Empty);
+        var progress = new Progress<double>();
+        var options = new MetadataRefreshOptions(directories)
+        {
+            MetadataRefreshMode = MetadataRefreshMode.None,
+            ImageRefreshMode = MetadataRefreshMode.None
+        };
+        try
+        {
+            await scanLock.WaitAsync(timeout.Token).ConfigureAwait(false);
+            try
+            {
+                directories.Invalidate(destination);
+                await parent.ValidateChildren(progress, options, recursive: false, cancellationToken: timeout.Token).ConfigureAwait(false);
+                if (mediaType == "movie")
+                    return result.Created.Concat(result.Skipped).Any(file => _library.FindByPath(file, false) is not null);
+
+                if (_library.FindByPath(titlePath, true) is not Folder series) return false;
+                directories.Invalidate(titlePath);
+                await series.ValidateChildren(progress, options, recursive: true, cancellationToken: timeout.Token).ConfigureAwait(false);
+                return result.Created.Concat(result.Skipped).Any(file => _library.FindByPath(file, false) is not null);
+            }
+            finally { scanLock.Release(); }
+        }
+        catch (Exception error) when (error is OperationCanceledException or IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            logger.LogDebug(error, "Direct import scan did not complete for {TitlePath}", titlePath);
+            return false;
+        }
     }
 
     private LibraryOption? FindAddDestination(string mediaType, LibraryOption[]? libraries = null)

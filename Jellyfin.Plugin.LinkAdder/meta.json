@@ -1,6 +1,6 @@
 {
   "category": "General",
-  "changelog": "Show series title cards in search, index alphabetized TV and anime folders, and tolerate one title typo. Batch media server searches, add an optional per-user search limit, and link to GitHub issue reporting from Search. Add an in-app setup guide and collapsible Setup Media panels.",
+  "changelog": "Show an animated count of confirmed stream files inside the FTP add button and count existing files separately. Try to index imported titles immediately, with a Jellyfin library scan as fallback.",
   "description": "Search private media servers, import links, and add movies, shows, or anime to Jellyfin as streams or local files.",
   "guid": "9399b942-4b6d-46a7-9a5d-a01764f7ee6a",
   "name": "Media Source Bridge",
@@ -8,7 +8,7 @@
   "owner": "shahadat-hossion",
   "targetAbi": "12.0.0.0",
   "timestamp": "2026-11-23T17:49:16Z",
-  "version": "2.7.19.0",
+  "version": "2.7.21.0",
   "status": "Active",
   "autoUpdate": false,
   "assemblies": []

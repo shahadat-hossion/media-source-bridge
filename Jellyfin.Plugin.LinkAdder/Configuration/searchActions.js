@@ -75,26 +75,97 @@ function paint(button, state) {
     symbol.setAttribute('aria-hidden', 'true');
     symbol.textContent = icon;
     const text = document.createElement('span');
+    text.className = 'linkAdderActionText';
     text.setAttribute('aria-live', 'polite');
     text.textContent = label;
-    button.replaceChildren(symbol, text);
-    if (button.nextElementSibling?.matches('.linkAdderActionStatus')) button.nextElementSibling.remove();
-    if (state.message) {
+    const detail = state.message || state.progress;
+    if (detail) {
         const status = document.createElement('small');
         status.className = 'linkAdderActionStatus';
-        status.setAttribute('role', 'status');
-        status.textContent = state.message;
-        button.after(status);
+        status.textContent = detail;
+        text.append(status);
     }
+    button.replaceChildren(symbol, text);
 }
 
 function transition(job, phase, message = '') {
     Object.assign(job, {phase, message});
+    if (phase !== 'adding' && phase !== 'indexing') job.progress = '';
     for (const button of job.buttons) {
         if (button.isConnected) paint(button, job);
         else job.buttons.delete(button);
     }
     if (phase === 'ready' || phase === 'pending' || phase === 'failed') job.buttons.clear();
+}
+
+function importSummary(added, skipped, total) {
+    if (!total) return 'Reading source…';
+    return skipped ? `${added} added · ${skipped} existing` : `${added} of ${total} added`;
+}
+
+async function addWithProgress(job, call, request) {
+    // getRandomValues also works on Jellyfin servers accessed over local HTTP.
+    const progressId = Array.from(crypto.getRandomValues(new Uint8Array(16)),
+        byte => byte.toString(16).padStart(2, '0')).join('');
+    let finished = false;
+    let timer;
+    let displayed = 0;
+    let confirmed = 0;
+    let skipped = 0;
+    let total = 0;
+    let animation;
+    let cancelled = false;
+    const showCount = () => {
+        const progress = importSummary(displayed, skipped, total);
+        if (job.progress !== progress) {
+            job.progress = progress;
+            transition(job, 'adding');
+        }
+    };
+    const updateCount = (added, existing, planned) => {
+        confirmed = added;
+        skipped = existing;
+        total = planned;
+        if (!animation) {
+            animation = Promise.resolve().then(async () => {
+                while (!cancelled && displayed < confirmed) {
+                    displayed++;
+                    showCount();
+                    const delay = Math.max(16, Math.min(100, 2200 / total));
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+                if (!cancelled) showCount();
+                animation = undefined;
+            });
+        }
+        return animation;
+    };
+    const poll = async () => {
+        try {
+            const status = await call('AddProgress/' + progressId);
+            if (finished || !status) return;
+            updateCount(value(status, 'Added'), value(status, 'Skipped'), value(status, 'Total'));
+        } catch (_) {
+            // A missed progress update should not interrupt the import.
+        } finally {
+            if (!finished) timer = setTimeout(poll, 350);
+        }
+    };
+    timer = setTimeout(poll, 350);
+    let result;
+    try {
+        result = await call('Add', 'POST', {...request, progressId});
+    } catch (error) {
+        cancelled = true;
+        throw error;
+    } finally {
+        finished = true;
+        clearTimeout(timer);
+    }
+    const added = (value(result, 'Created') || []).length;
+    const existing = (value(result, 'Skipped') || []).length;
+    await updateCount(added, existing, added + existing);
+    return result;
 }
 
 export async function waitForIndexedItem(mediaType, added) {
@@ -117,23 +188,34 @@ export async function waitForIndexedItem(mediaType, added) {
     const userId = ApiClient.getCurrentUserId();
     const itemType = mediaType === 'movie' ? 'Movie' : 'Series';
     const deadline = Date.now() + 90000;
+    let timeout;
+    const expired = new Promise(resolve => {
+        timeout = setTimeout(() => resolve(null), 90000);
+    });
+    const getItems = options => Promise.race([ApiClient.getItems(userId, options), expired]);
     let attempts = 0;
-    while (Date.now() < deadline) {
-        const result = await ApiClient.getItems(userId, {
-            SearchTerm:query, IncludeItemTypes:itemType, Recursive:true, ...scope, Limit:50, Fields:'Path'
-        });
-        const match = (result.Items || []).find(matches);
-        if (match) return match;
-        if (++attempts % 3 === 0) {
-            const recent = await ApiClient.getItems(userId, {
-                IncludeItemTypes:itemType, Recursive:true, ...scope, SortBy:'DateCreated', SortOrder:'Descending', Limit:75, Fields:'Path'
+    try {
+        while (Date.now() < deadline) {
+            const result = await getItems({
+                SearchTerm:query, IncludeItemTypes:itemType, Recursive:true, ...scope, Limit:50, Fields:'Path'
             });
-            const exactPath = (recent.Items || []).find(matches);
-            if (exactPath) return exactPath;
+            if (!result) break;
+            const match = (result.Items || []).find(matches);
+            if (match) return match;
+            if (++attempts % 3 === 0 && Date.now() < deadline) {
+                const recent = await getItems({
+                    IncludeItemTypes:itemType, Recursive:true, ...scope, SortBy:'DateCreated', SortOrder:'Descending', Limit:75, Fields:'Path'
+                });
+                if (!recent) break;
+                const exactPath = (recent.Items || []).find(matches);
+                if (exactPath) return exactPath;
+            }
+            await new Promise(resolve => setTimeout(resolve, Math.min(2500, Math.max(0, deadline - Date.now()))));
         }
-        await new Promise(resolve => setTimeout(resolve, 2500));
+        return null;
+    } finally {
+        clearTimeout(timeout);
     }
-    return null;
 }
 
 export function openItem(item) {
@@ -167,7 +249,8 @@ function ensureStyles() {
     style.textContent = [
         '.linkAdderMediaAction .linkAdderActionIcon {font-size:1.3em;margin-inline-end:.35em;vertical-align:middle}',
         '.linkAdderMediaAction[aria-busy=true] .linkAdderActionIcon {animation:linkAdderDownload .8s ease-in-out infinite alternate}',
-        '.linkAdderActionStatus {display:block;margin-top:.35em;overflow-wrap:anywhere}',
+        '.linkAdderActionText {min-width:0;text-align:start}',
+        '.linkAdderMediaAction .linkAdderActionStatus {display:block;margin-top:.15em;font-size:.8em;line-height:1.2;white-space:normal;overflow-wrap:anywhere;text-transform:none}',
         '@keyframes linkAdderDownload {from{transform:translateY(-.2em);opacity:.6}to{transform:translateY(.2em);opacity:1}}',
         '@media(prefers-reduced-motion:reduce){.linkAdderMediaAction[aria-busy=true] .linkAdderActionIcon{animation:none}}'
     ].join('\n');
@@ -195,14 +278,18 @@ export function bind(button, item, localItems, call) {
         job.buttons.add(button);
         if (job.phase === 'adding' || job.phase === 'indexing') return;
         if (!job.added) {
+            job.progress = importSummary(0, 0, 0);
             transition(job, 'adding');
             try {
-                job.added = await call('Add', 'POST', {url:item.url, mediaType, title:item.name});
+                job.added = await addWithProgress(job, call, {url:item.url, mediaType, title:item.name});
             } catch (error) {
                 transition(job, 'failed', error.message || 'The title could not be added.');
                 return;
             }
         }
+        const added = (value(job.added, 'Created') || []).length;
+        const skipped = (value(job.added, 'Skipped') || []).length;
+        job.progress = importSummary(added, skipped, added + skipped);
         transition(job, 'indexing');
         job.item = await waitForIndexedItem(mediaType, job.added).catch(() => null);
         transition(job, job.item ? 'ready' : 'pending', job.item ? '' : 'STRM files are ready. Jellyfin is still indexing this title.');
