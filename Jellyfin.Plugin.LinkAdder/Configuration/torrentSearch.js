@@ -53,7 +53,7 @@ function showOpeningGlow(button){
     button.setAttribute('aria-busy','true');
 }
 
-export async function prepareTorrent(group,root,call,button,addOnly=false){
+export async function prepareTorrent(group,root,call,button){
     if(preparation)return;
     let status=root.querySelector('.torrentPreparationStatus');
     if(!status){
@@ -80,14 +80,11 @@ export async function prepareTorrent(group,root,call,button,addOnly=false){
             return;
         }
         if(!root.isConnected)return;
-        if (addOnly) {
-            status.textContent='Added '+group.title+' to the library.';
-            button.innerHTML='<span class="material-icons" aria-hidden="true">play_arrow</span><span>Play</span>';
-            button.setAttribute('aria-label','Play '+group.title);
-            button.onclick=()=>actions.playItem(item);
-        } else {
-            await actions.playItem(item);
-        }
+        status.textContent='Added '+group.title+' to the library.';
+        button.innerHTML='<span class="material-icons" aria-hidden="true">open_in_new</span><span>Open title</span>';
+        button.setAttribute('aria-label','Open '+group.title);
+        button.onclick=()=>actions.openItem(item);
+        actions.openItem(item);
     }catch(error){status.textContent=error.message}
     finally{
         preparation=null;

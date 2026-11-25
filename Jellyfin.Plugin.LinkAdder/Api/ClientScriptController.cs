@@ -513,7 +513,7 @@ public sealed class ClientScriptController : ControllerBase
                     button.setAttribute('aria-label', (torrentOnly ? 'Add ' : 'Open ') + group.title + ' from a torrent');
                     button.onclick = () => {
                         const root = document.getElementById(remoteSectionId);
-                        if (root) return torrentActions.prepareTorrent(group, root, pluginCall, button, torrentOnly);
+                        if (root) return torrentActions.prepareTorrent(group, root, pluginCall, button);
                     };
                     target.append(button);
                     if (torrentOnly) {

@@ -60,7 +60,7 @@ const states = {
     indexing: ['downloading', 'Indexing…'],
     pending: ['refresh', 'Check again'],
     failed: ['add', 'Retry Add'],
-    ready: ['play_arrow', 'Play']
+    ready: ['open_in_new', 'Open title']
 };
 
 function paint(button, state) {
@@ -269,12 +269,12 @@ export function bind(button, item, localItems, call) {
 
     button.onclick = async () => {
         let job = jobs.get(key);
-        if (existing) return playItem(existing);
+        if (existing) return openItem(existing);
         if (!job) {
             job = {phase:'add', buttons:new Set()};
             jobs.set(key, job);
         }
-        if (job.phase === 'ready') return playItem(job.item);
+        if (job.phase === 'ready') return openItem(job.item);
         job.buttons.add(button);
         if (job.phase === 'adding' || job.phase === 'indexing') return;
         if (!job.added) {
@@ -293,6 +293,7 @@ export function bind(button, item, localItems, call) {
         transition(job, 'indexing');
         job.item = await waitForIndexedItem(mediaType, job.added).catch(() => null);
         transition(job, job.item ? 'ready' : 'pending', job.item ? '' : 'STRM files are ready. Jellyfin is still indexing this title.');
+        if (job.item && button.isConnected) openItem(job.item);
     };
 }
 

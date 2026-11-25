@@ -105,7 +105,7 @@ function addTorrentButton(container,group,actions,torrentOnly=false){
     button.setAttribute('is','emby-button');
     button.innerHTML='<span class="material-icons" aria-hidden="true">add</span><span>Torrent</span>';
     button.setAttribute('aria-label',(torrentOnly?'Add ':'Open ')+group.title+' from a torrent');
-    button.onclick=()=>actions.prepareTorrent(group,page,call,button,torrentOnly);
+    button.onclick=()=>actions.prepareTorrent(group,page,call,button);
     container.append(button);
     return button;
 }

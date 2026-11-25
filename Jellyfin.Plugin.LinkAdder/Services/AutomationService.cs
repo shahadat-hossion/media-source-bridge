@@ -61,7 +61,7 @@ public sealed partial class AutomationService
             if (!IsCompatibleLibraryPath(path, title.MediaType))
                 return new(ToCandidate(title, "failed", "No compatible destination library is configured."), []);
 
-            var preview = await service.PreviewAsync(match.Url, title.MediaType, title.Title, ct).ConfigureAwait(false);
+            var preview = await service.PreviewAsync(match.Url, title.MediaType, GetImportTitle(title), ct).ConfigureAwait(false);
             var write = service.Write(preview, path, _playback.CreateUrl);
             if (write.Created.Count == 0)
                 return new(ToCandidate(title, "skipped", "Matching STRM files already exist.", match.Url, match.Source), []);
@@ -148,7 +148,7 @@ public sealed partial class AutomationService
                         continue;
                     }
                     var displayTitle = title.Year is null ? title.Title : $"{title.Title} ({title.Year})";
-                    var preview = await service.PreviewAsync(match.Url, title.MediaType, displayTitle, ct).ConfigureAwait(false);
+                    var preview = await service.PreviewAsync(match.Url, title.MediaType, GetImportTitle(title), ct).ConfigureAwait(false);
                     var write = service.Write(preview, path, _playback.CreateUrl);
                     if (write.Created.Count == 0)
                     {
@@ -186,6 +186,19 @@ public sealed partial class AutomationService
         {
             RunLock.Release();
         }
+    }
+
+    private static string GetImportTitle(DiscoveryTitle title)
+    {
+        var name = title.Year is null ? title.Title : $"{title.Title} ({title.Year})";
+        var prefix = $"tmdb:{title.MediaType}:";
+        if (title.ContentId.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+            && int.TryParse(title.ContentId.AsSpan(prefix.Length), out var tmdbId) && tmdbId > 0)
+        {
+            return $"{name} [tmdbid-{tmdbId}]";
+        }
+
+        return name;
     }
 
     private static async Task<IReadOnlyList<RemoteSearchResult>> FindExactMatchesAsync(LinkAdderService service, DiscoveryTitle title, CancellationToken ct)

@@ -1,14 +1,14 @@
 {
   "category": "General",
-  "changelog": "Show an animated count of confirmed stream files inside the FTP add button and count existing files separately. Try to index imported titles immediately, with a Jellyfin library scan as fallback.",
+  "changelog": "Open newly added search results on their details page without starting playback. Normalize imported titles and pass through TMDb IDs from Discovery for better metadata matching.",
   "description": "Search private media servers, import links, and add movies, shows, or anime to Jellyfin as streams or local files.",
   "guid": "9399b942-4b6d-46a7-9a5d-a01764f7ee6a",
   "name": "Media Source Bridge",
   "overview": "Search private media sources and add streams or download media to Jellyfin libraries.",
   "owner": "shahadat-hossion",
   "targetAbi": "12.0.0.0",
-  "timestamp": "2026-11-23T17:49:16Z",
-  "version": "2.7.21.0",
+  "timestamp": "2026-11-25T22:56:10Z",
+  "version": "2.7.22.0",
   "status": "Active",
   "autoUpdate": false,
   "assemblies": []

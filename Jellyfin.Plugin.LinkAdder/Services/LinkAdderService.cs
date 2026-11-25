@@ -93,7 +93,9 @@ public sealed partial class LinkAdderService
     {
         if (requestedTitle?.Length > 200) throw new InvalidOperationException("Keep the title under 201 characters.");
         if(mediaType=="anime")mediaType="series";
-        var source=ValidateConfiguredSource(sourceUrl); IReadOnlyList<Uri> videos=IsVideo(source)?[source]:await CrawlVideosAsync(source.AbsolutePath.EndsWith('/') ? source : new UriBuilder(source) { Path = source.AbsolutePath + "/" }.Uri,ct).ConfigureAwait(false); if(videos.Count==0) throw new InvalidOperationException("No supported video files were found."); var title=string.IsNullOrWhiteSpace(requestedTitle)?InferTitle(source,mediaType):CleanName(requestedTitle); return new(title,MakePlan(videos,mediaType,title));
+        var source=ValidateConfiguredSource(sourceUrl); IReadOnlyList<Uri> videos=IsVideo(source)?[source]:await CrawlVideosAsync(source.AbsolutePath.EndsWith('/') ? source : new UriBuilder(source) { Path = source.AbsolutePath + "/" }.Uri,ct).ConfigureAwait(false); if(videos.Count==0) throw new InvalidOperationException("No supported video files were found."); var sourceTitle = string.IsNullOrWhiteSpace(requestedTitle) ? InferTitle(source, mediaType) : requestedTitle;
+        var title = NormalizeImportTitle(sourceTitle, mediaType);
+        return new(title, MakePlan(videos, mediaType, title, GetDefaultSeason(sourceTitle)));
     }
 
     public AddResult Write(PreviewResult preview, string outputRoot, Func<string, string>? playbackUrl = null,
@@ -150,8 +152,8 @@ public sealed partial class LinkAdderService
 
     internal static PreviewResult PlanTorrentStreams(string title, string mediaType, IReadOnlyList<Uri> videos)
     {
-        var name = CleanName(title);
-        return new PreviewResult(name, MakePlan(videos, mediaType == "anime" ? "series" : mediaType, name));
+        var name = NormalizeImportTitle(title, mediaType);
+        return new PreviewResult(name, MakePlan(videos, mediaType == "anime" ? "series" : mediaType, name, GetDefaultSeason(title)));
     }
 
     public async Task<AddResult> DownloadAsync(PreviewResult preview,string outputRoot,CancellationToken ct,Action<double,string>? progress=null)
@@ -618,7 +620,7 @@ public sealed partial class LinkAdderService
         return true;
     }
     private static bool IsVideo(Uri uri)=>!uri.AbsolutePath.EndsWith('/') && VideoExtensions.Contains(Path.GetExtension(Uri.UnescapeDataString(uri.AbsolutePath)));
-    private static IReadOnlyList<PlannedFile> MakePlan(IReadOnlyList<Uri> videos,string mediaType,string title)
+    private static IReadOnlyList<PlannedFile> MakePlan(IReadOnlyList<Uri> videos,string mediaType,string title,int defaultSeason)
     {
         if (mediaType is not ("movie" or "series")) throw new InvalidOperationException("Choose Movie or Series.");
         var result = new List<PlannedFile>();
@@ -634,7 +636,7 @@ public sealed partial class LinkAdderService
             }
 
             var seasonFolder = SeasonRegex().Matches(path).LastOrDefault();
-            var season = seasonFolder is null ? 1 : int.Parse(seasonFolder.Groups[1].Value);
+            var season = seasonFolder is null ? defaultSeason : int.Parse(seasonFolder.Groups[1].Value);
             var match = EpisodeRegex().Match(raw);
             var code = CleanName(raw);
             if (match.Success)
@@ -653,6 +655,35 @@ public sealed partial class LinkAdderService
         return result.DistinctBy(file => file.RelativePath, OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal).ToArray();
     }
     private static string InferTitle(Uri source,string mediaType){var path=Uri.UnescapeDataString(source.AbsolutePath).TrimEnd('/');var candidate=IsVideo(source)?Path.GetFileNameWithoutExtension(path):Path.GetFileName(path);if(mediaType=="series"&&candidate.StartsWith("Season",StringComparison.OrdinalIgnoreCase))candidate=Path.GetFileName(Path.GetDirectoryName(path)??path);candidate=CleanName(candidate??"Untitled");var m=EpisodeRegex().Match(candidate);return mediaType=="series"&&m.Success&&m.Index>0?CleanName(candidate[..m.Index]):candidate;}
+    private static int GetDefaultSeason(string title)
+    {
+        var withoutIdentifiers = ProviderIdentifierRegex().Replace(title, string.Empty).Trim();
+        var normalized = CatalogYearRegex().Replace(withoutIdentifiers, " (${year})");
+        return int.TryParse(SeriesSeasonSuffixRegex().Match(normalized).Groups[1].Value, out var season) ? season : 1;
+    }
+
+    internal static string NormalizeImportTitle(string value, string mediaType)
+    {
+        var identifiers = ProviderIdentifierRegex().Matches(value).Select(match => match.Value).Distinct(StringComparer.OrdinalIgnoreCase);
+        var title = CleanName(ProviderIdentifierRegex().Replace(value, string.Empty));
+        title = CatalogYearRegex().Replace(title, " (${year})");
+        if (mediaType is "series" or "anime")
+        {
+            title = SeriesSeasonSuffixRegex().Replace(title, string.Empty).Trim();
+        }
+
+        return string.Join(' ', new[] { title }.Concat(identifiers));
+    }
+
+    [GeneratedRegex(@"\[(?:(?:tmdbid|tvdbid)-[1-9]\d*|imdbid-tt\d+)\]", RegexOptions.IgnoreCase)]
+    private static partial Regex ProviderIdentifierRegex();
+
+    [GeneratedRegex(@"\s*\(\s*(?:(?:TV\s+(?:Cartoon|Series|Mini[- ]?Series|Movie|Special|Short)|Movie|Video)\s+)?(?<year>(?:19|20)\d{2})(?:\s*[-–—]\s*(?:(?:19|20)\d{2}|Present)?)?\s*\)$", RegexOptions.IgnoreCase)]
+    private static partial Regex CatalogYearRegex();
+
+    [GeneratedRegex(@"\s+(?:-\s+)?Season\s+(\d{1,2})(?=\s*(?:\(\d{4}\))?$)", RegexOptions.IgnoreCase)]
+    private static partial Regex SeriesSeasonSuffixRegex();
+
     private static string CleanName(string value){var x=DotRegex().Replace(value," ");x=QualityRegex().Replace(x,"");x=InvalidRegex().Replace(x," ");x=SpaceRegex().Replace(x," ").Trim(' ','.','-');return string.IsNullOrWhiteSpace(x)?"Untitled":x;}
     [GeneratedRegex(@"%[0-9a-fA-F]{2}")]
     private static partial Regex EncodedOctetRegex();
