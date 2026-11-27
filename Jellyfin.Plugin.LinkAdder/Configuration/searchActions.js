@@ -60,7 +60,7 @@ const states = {
     indexing: ['downloading', 'Indexing…'],
     pending: ['refresh', 'Check again'],
     failed: ['add', 'Retry Add'],
-    ready: ['open_in_new', 'Open title']
+    ready: ['open_in_new', 'Open']
 };
 
 function paint(button, state) {
@@ -249,6 +249,7 @@ function ensureStyles() {
     style.textContent = [
         '.linkAdderMediaAction .linkAdderActionIcon {font-size:1.3em;margin-inline-end:.35em;vertical-align:middle}',
         '.linkAdderMediaAction[aria-busy=true] .linkAdderActionIcon {animation:linkAdderDownload .8s ease-in-out infinite alternate}',
+        '.linkAdderMediaAction[data-link-adder-phase=ready] {background-color:#16733c;color:#fff;text-transform:none}',
         '.linkAdderActionText {min-width:0;text-align:start}',
         '.linkAdderMediaAction .linkAdderActionStatus {display:block;margin-top:.15em;font-size:.8em;line-height:1.2;white-space:normal;overflow-wrap:anywhere;text-transform:none}',
         '@keyframes linkAdderDownload {from{transform:translateY(-.2em);opacity:.6}to{transform:translateY(.2em);opacity:1}}',
@@ -293,7 +294,6 @@ export function bind(button, item, localItems, call) {
         transition(job, 'indexing');
         job.item = await waitForIndexedItem(mediaType, job.added).catch(() => null);
         transition(job, job.item ? 'ready' : 'pending', job.item ? '' : 'STRM files are ready. Jellyfin is still indexing this title.');
-        if (job.item && button.isConnected) openItem(job.item);
     };
 }
 
